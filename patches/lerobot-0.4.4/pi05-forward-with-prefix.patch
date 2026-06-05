@@ -1,0 +1,162 @@
+diff --git a/src/lerobot/policies/pi05/modeling_pi05.py b/src/lerobot/policies/pi05/modeling_pi05.py
+index 334e13b..4419291 100644
+--- a/src/lerobot/policies/pi05/modeling_pi05.py
++++ b/src/lerobot/policies/pi05/modeling_pi05.py
+@@ -381,6 +381,11 @@ class PaliGemmaWithExpertModel(
+         )
+ 
+         self.paligemma = PaliGemmaForConditionalGeneration(config=vlm_config_hf)
++        # Tie lm_head <-> language_model.embed_tokens to share a single nn.Parameter.
++        # Upstream HF PaliGemma does NOT tie them by default; pi0.5 SFT ckpts store
++        # only lm_head.weight. Without this rebind, load_state_dict either leaves
++        # embed_tokens.weight at random init or counts the embedding twice (OOM risk).
++        self.paligemma.lm_head.weight = self.paligemma.model.language_model.embed_tokens.weight
+         self.gemma_expert = GemmaForCausalLM(config=action_expert_config_hf)
+         self.gemma_expert.model.embed_tokens = None
+ 
+@@ -776,6 +781,72 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
+ 
+         return F.mse_loss(u_t, v_t, reduction="none")
+ 
++    def forward_with_prefix(
++        self, images, img_masks, tokens, masks, actions, noise=None, time=None
++    ) -> tuple[Tensor, Tensor]:
++        """Like `forward` but also returns the PaLiGemma prefix hidden states.
++
++        Performs exactly ONE `paligemma_with_expert.forward` call, returning both
++        prefix_out and suffix_out from the same forward (no double prefix forward).
++
++        Returns:
++            losses: per-element MSE loss tensor, shape (B, chunk_size, max_action_dim).
++            prefix_out: PaLiGemma prefix hidden states, shape (B, M, D), dtype=bf16
++                if paligemma is bf16 otherwise fp32.
++        """
++        if noise is None:
++            noise = self.sample_noise(actions.shape, actions.device)
++
++        if time is None:
++            time = self.sample_time(actions.shape[0], actions.device)
++
++        time_expanded = time[:, None, None]
++        x_t = time_expanded * noise + (1 - time_expanded) * actions
++        u_t = noise - actions
++
++        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, tokens, masks)
++        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, time)
++
++        if (
++            self.paligemma_with_expert.paligemma.language_model.layers[0].self_attn.q_proj.weight.dtype
++            == torch.bfloat16
++        ):
++            suffix_embs = suffix_embs.to(dtype=torch.bfloat16)
++            prefix_embs = prefix_embs.to(dtype=torch.bfloat16)
++
++        pad_masks = torch.cat([prefix_pad_masks, suffix_pad_masks], dim=1)
++        att_masks = torch.cat([prefix_att_masks, suffix_att_masks], dim=1)
++
++        att_2d_masks = make_att_2d_masks(pad_masks, att_masks)
++        position_ids = torch.cumsum(pad_masks, dim=1) - 1
++
++        att_2d_masks_4d = self._prepare_attention_masks_4d(att_2d_masks)
++
++        def forward_func(prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond):
++            (prefix_out, suffix_out), _ = self.paligemma_with_expert.forward(
++                attention_mask=att_2d_masks_4d,
++                position_ids=position_ids,
++                past_key_values=None,
++                inputs_embeds=[prefix_embs, suffix_embs],
++                use_cache=False,
++                adarms_cond=[None, adarms_cond],
++            )
++            return prefix_out, suffix_out
++
++        prefix_out, suffix_out = self._apply_checkpoint(
++            forward_func, prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond
++        )
++
++        suffix_out = suffix_out[:, -self.config.chunk_size :]
++        suffix_out = suffix_out.to(dtype=torch.float32)
++
++        def action_out_proj_func(suffix_out):
++            return self.action_out_proj(suffix_out)
++
++        v_t = self._apply_checkpoint(action_out_proj_func, suffix_out)
++
++        return F.mse_loss(u_t, v_t, reduction="none"), prefix_out
++
+     @torch.no_grad()  # see openpi `sample_actions` (slightly adapted)
+     def sample_actions(
+         self,
+@@ -1045,6 +1116,17 @@ class PI05Policy(PreTrainedPolicy):
+         except Exception as e:
+             print(f"Warning: Could not remap state dict keys: {e}")
+ 
++        # Param-count assertion: pi0.5 (PaliGemma 2B + Gemma 300M, bf16) with embed_tokens
++        # tied to lm_head. Diverging from 3,616,757,520 means the tie regressed.
++        expected_params = 3_616_757_520
++        actual_params = sum(p.numel() for p in model.parameters())
++        if actual_params != expected_params:
++            raise RuntimeError(
++                f"PI05 param count mismatch: expected {expected_params:,}, got {actual_params:,}. "
++                "Likely cause: lm_head/embed_tokens not tied. Verify "
++                "PaliGemmaWithExpertModel.__init__ has `self.paligemma.lm_head.weight = embed.weight`."
++            )
++
+         return model
+ 
+     def _fix_pytorch_state_dict_keys(
+@@ -1097,6 +1179,14 @@ class PI05Policy(PreTrainedPolicy):
+                 # Some checkpoints might have this, but current model expects different structure
+                 logging.warning(f"Vision embedding key might need handling: {key}")
+ 
++            if (
++                key == "model.paligemma_with_expert.paligemma.lm_head.weight"
++                or key == "paligemma_with_expert.paligemma.lm_head.weight"
++            ):
++                fixed_state_dict[
++                    "model.paligemma_with_expert.paligemma.model.language_model.embed_tokens.weight"
++                ] = value.clone()
++
+             fixed_state_dict[new_key] = value
+ 
+         return fixed_state_dict
+@@ -1270,6 +1360,39 @@ class PI05Policy(PreTrainedPolicy):
+             loss_dict["loss"] = loss.item()
+             return loss, loss_dict
+ 
++    def forward_with_prefix(
++        self, batch: dict[str, Tensor], reduction: str = "mean"
++    ) -> tuple[Tensor, dict, Tensor]:
++        """Sibling of `forward` returning PaLiGemma prefix hidden states for joint RL Token training.
++
++        Returns:
++            loss: scalar (reduction='mean') or per-sample (reduction='none') MSE loss.
++            loss_dict: dict with same keys as `forward` (loss, loss_per_dim).
++            prefix_hidden: (B, M, D) prefix hidden states, dtype matches PaLiGemma precision (bf16
++                or fp32). Caller is responsible for casting to fp32 before feeding RLTokenModule.
++        """
++        images, img_masks = self._preprocess_images(batch)
++        tokens, masks = batch[f"{OBS_LANGUAGE_TOKENS}"], batch[f"{OBS_LANGUAGE_ATTENTION_MASK}"]
++
++        actions = self.prepare_action(batch)
++
++        losses, prefix_hidden = self.model.forward_with_prefix(images, img_masks, tokens, masks, actions)
++
++        original_action_dim = self.config.output_features[ACTION].shape[0]
++        losses = losses[:, :, :original_action_dim]
++
++        loss_dict = {
++            "loss_per_dim": losses.mean(dim=[0, 1]).detach().cpu().numpy().tolist(),
++        }
++
++        if reduction == "none":
++            per_sample_loss = losses.mean(dim=(1, 2))
++            loss_dict["loss"] = per_sample_loss.mean().item()
++            return per_sample_loss, loss_dict, prefix_hidden
++        loss = losses.mean()
++        loss_dict["loss"] = loss.item()
++        return loss, loss_dict, prefix_hidden
++
+     def _get_default_peft_targets(self) -> dict[str, any]:
+         """Return default PEFT target modules for PI0.5 fine-tuning."""
+         common_projections = (

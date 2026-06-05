@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=71", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evo-rlt"
+version = "0.1.0"
+description = "Evo-RLT: RL Token wrapper and LeRobot integration for real-world robot RL"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "torch>=2.2",
+    "numpy>=1.23",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+lerobot = ["lerobot>=0.4.4,<0.5.0", "safetensors>=0.4.3", "packaging>=24.0"]
+test = ["pytest>=8.1", "pytest-timeout>=2.4"]
+dev = ["evo-rlt[lerobot,test]", "ruff>=0.6"]
+
+[project.scripts]
+evo-rlt-build-transition-cache = "evo_rlt.cli.build_transition_cache:main"
+evo-rlt-build-bucket-cache = "evo_rlt.cli.build_bucket_cache:main"
+evo-rlt-build-transition-cache-v2 = "evo_rlt.cli.build_transition_cache_v2:main"
+evo-rlt-compute-token-variance = "evo_rlt.cli.compute_token_variance:main"
+evo-rlt-prepare-mix-buckets = "evo_rlt.cli.prepare_mix_buckets:main"
+evo-rlt-rescale-cache-reward = "evo_rlt.cli.rescale_cache_reward:main"
+evo-rlt-train-actor-critic = "evo_rlt.cli.train_chunk_actor_critic:main"
+evo-rlt-train-rl-token = "evo_rlt.cli.train_rl_token:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+evo_rlt = ["core/configs/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 110

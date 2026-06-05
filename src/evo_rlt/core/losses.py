@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import torch
+import torch.nn.functional as F
+
+from evo_rlt.core.actor import ChunkActor
+from evo_rlt.core.critic import TwinCritic
+from evo_rlt.core.utils import compute_discount_vector
+
+
+def discounted_chunk_return(
+    reward_seq: torch.Tensor, gamma: float, actual_steps: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute discounted return over a chunk of rewards.
+
+    Args:
+        reward_seq: (B, C) rewards for each timestep (padded with 0 beyond actual_steps)
+        gamma: discount factor
+        actual_steps: (B,) number of valid steps per chunk (if None, assume all C are valid)
+
+    Returns:
+        (B, 1) discounted return
+    """
+    C = reward_seq.shape[1]
+    discounts = compute_discount_vector(gamma, C, device=reward_seq.device)
+    return (reward_seq * discounts.unsqueeze(0)).sum(dim=1, keepdim=True)
+
+
+def critic_loss(
+    critic: TwinCritic,
+    target_critic: TwinCritic,
+    actor: ChunkActor,
+    batch: dict[str, torch.Tensor],
+    gamma: float,
+    C: int,
+) -> torch.Tensor:
+    """TD3-style chunk-level TD loss with correct truncated-chunk handling.
+
+    Uses actual_steps to compute the correct bootstrap exponent gamma^k
+    instead of always using gamma^C.
+    """
+    x = batch["state_vec"]
+    a = batch["exec_chunk_flat"]
+    x_next = batch["next_state_vec"]
+    ref_next = batch["next_ref_flat"]
+    reward_seq = batch["reward_seq"]
+    done = batch["done"]
+    actual_steps = batch.get("actual_steps")
+
+    with torch.no_grad():
+        # Use deterministic mean for target action (TD3-style), clamped to [-1,1]
+        mu_next, _ = actor.forward(x_next, ref_next)
+        mu_next = mu_next.clamp(-1.0, 1.0)
+        q_next = target_critic.min_q(x_next, mu_next)
+        # Clamp target Q to prevent bootstrapping divergence
+        q_next = q_next.clamp(-100.0, 100.0)
+        r = discounted_chunk_return(reward_seq, gamma, actual_steps)
+
+        # Bootstrap with gamma^k where k = actual steps executed
+        if actual_steps is not None:
+            bootstrap_exp = actual_steps.unsqueeze(-1).float()
+        else:
+            bootstrap_exp = torch.full_like(done.unsqueeze(-1), C, dtype=torch.float32)
+        bootstrap = (gamma ** bootstrap_exp) * (1.0 - done.unsqueeze(-1)) * q_next
+        target = r + bootstrap
+
+    q1, q2 = critic(x, a)
+    return F.mse_loss(q1, target) + F.mse_loss(q2, target)
+
+
+def actor_loss(
+    actor: ChunkActor,
+    critic: TwinCritic,
+    batch: dict[str, torch.Tensor],
+    beta: float,
+) -> torch.Tensor:
+    """Q-maximization + BC regularization toward VLA reference.
+
+    Uses deterministic mean (not noisy samples) for stable optimization.
+    BC term is the per-sample squared distance summed across action dims, then
+    averaged over the batch — matching the paper's β-scaling convention. This
+    differs from mean-MSE by a factor of C*D_flat.
+    """
+    x = batch["state_vec"]
+    ref = batch["ref_chunk_flat"]
+    mu, _ = actor.forward(x, ref, training=True)
+    q = critic.min_q(x, mu)
+    bc_reg = ((mu - ref) ** 2).sum(dim=-1).mean()
+    return -q.mean() + beta * bc_reg
