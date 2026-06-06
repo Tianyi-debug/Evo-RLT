@@ -13,6 +13,7 @@ def add_common_record_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--task", default="Insert the copper screw into the black sleeve.")
     parser.add_argument("--num-episodes", type=int, default=1)
     parser.add_argument("--episode-time-s", type=int, default=3000)
+    parser.add_argument("--reset-time-s", type=int, default=None)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--setup-json", default=None)
     parser.add_argument("--dataset-tag", default=None)
@@ -58,6 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_common_record_args(full)
     add_rtc_args(full)
+    full.add_argument("--phase-mode", default=None)
+    full.add_argument("--chunk-exec-steps", type=int, default=None)
+    full.add_argument("--pedal-outcome", action=argparse.BooleanOptionalAction, default=False)
+    full.add_argument("--double-tap-window-s", type=float, default=0.6)
     full.set_defaults(func=run_full)
 
     live = subparsers.add_parser("live", help="Run policy live on the robot without saving a dataset.")

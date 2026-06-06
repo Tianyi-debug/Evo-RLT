@@ -42,6 +42,7 @@ def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
         task="task",
         num_episodes=5,
         episode_time_s=3000,
+        reset_time_s=None,
         fps=30,
         vcodec="h264",
         double_tap_window_s=0.6,
@@ -77,3 +78,30 @@ def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
     assert "--enable_episode_outcome_labeling=true" in argv
     assert "--policy_sync_to_teleop=true" in argv
     assert "--policy.path=/tmp/ac" in argv
+
+
+
+def test_full_vla_pedal_outcome_parser():
+    parser = build_parser()
+    args = parser.parse_args([
+        "full",
+        "--initial-source",
+        "vla",
+        "--policy-path",
+        "/tmp/ac",
+        "--vla-path",
+        "/tmp/base.pt",
+        "--phase-mode",
+        "always_vla",
+        "--chunk-exec-steps",
+        "25",
+        "--pedal-outcome",
+        "--reset-time-s",
+        "0",
+    ])
+
+    assert args.rtc is True
+    assert args.pedal_outcome is True
+    assert args.phase_mode == "always_vla"
+    assert args.chunk_exec_steps == 25
+    assert args.reset_time_s == 0

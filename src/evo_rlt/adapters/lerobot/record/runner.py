@@ -27,12 +27,89 @@ from evo_rlt.adapters.lerobot.record.common import (
 log = logging.getLogger(__name__)
 
 
-def prepare_lerobot_runtime() -> None:
+def prepare_lerobot_runtime(*, full_pedal_outcome_window_s: float | None = None) -> None:
     register()
     # lerobot_rlt_record imports ChunkACPolicy through this concrete module path.
     import evo_rlt.adapters.lerobot.policies.modeling_rlt_ac as modeling_rlt_ac
 
     sys.modules["lerobot.policies.rlt.modeling_rlt_ac"] = modeling_rlt_ac
+    if full_pedal_outcome_window_s is not None:
+        _patch_full_pedal_outcome_listener(full_pedal_outcome_window_s)
+
+
+class _CompositeListener:
+    def __init__(self, *listeners):
+        self._listeners = [listener for listener in listeners if listener is not None]
+
+    def stop(self) -> None:
+        for listener in self._listeners:
+            stop = getattr(listener, "stop", None)
+            if callable(stop):
+                stop()
+
+
+def _patch_full_pedal_outcome_listener(double_tap_window_s: float) -> None:
+    import threading
+
+    import lerobot.utils.control_utils as control_utils
+    from lerobot.utils.recording_annotations import EPISODE_FAILURE, EPISODE_SUCCESS
+
+    if getattr(control_utils.init_keyboard_listener, "_evo_rlt_full_pedal_outcome", False):
+        return
+
+    original_init_keyboard_listener = control_utils.init_keyboard_listener
+
+    def init_keyboard_listener(*args, **kwargs):
+        kwargs["episode_success_key"] = None
+        kwargs["episode_failure_key"] = None
+        keyboard_listener, events = original_init_keyboard_listener(*args, **kwargs)
+
+        try:
+            from lerobot.utils.pedal_listener import PedalListener
+        except ImportError as error:
+            logging.info("Full-episode pedal outcome unavailable: %s", error)
+            return keyboard_listener, events
+
+        state = {"timer": None}
+        lock = threading.Lock()
+
+        def mark_success() -> None:
+            with lock:
+                if state["timer"] is None:
+                    return
+                state["timer"] = None
+                events["episode_outcome"] = EPISODE_SUCCESS
+                events["exit_early"] = True
+            logging.info("Full-episode pedal outcome resolved as success")
+
+        def on_pedal(key_name: str) -> None:
+            if key_name != "r":
+                return
+            with lock:
+                timer = state["timer"]
+                if timer is None:
+                    timer = threading.Timer(double_tap_window_s, mark_success)
+                    timer.daemon = True
+                    state["timer"] = timer
+                    timer.start()
+                    logging.info(
+                        "Full-episode pedal end pending; tap again within %.1fs for failure",
+                        double_tap_window_s,
+                    )
+                    return
+                timer.cancel()
+                state["timer"] = None
+                events["episode_outcome"] = EPISODE_FAILURE
+                events["exit_early"] = True
+            logging.info("Full-episode pedal outcome resolved as failure")
+
+        pedal_listener = PedalListener(on_press=on_pedal)
+        if not pedal_listener.start():
+            return keyboard_listener, events
+        return _CompositeListener(keyboard_listener, pedal_listener), events
+
+    init_keyboard_listener._evo_rlt_full_pedal_outcome = True
+    control_utils.init_keyboard_listener = init_keyboard_listener
 
 
 def run_segment(args: argparse.Namespace) -> None:
@@ -94,6 +171,7 @@ def build_segment_record_argv(args, setup, paths, cal_dir: str, teleop_argv: lis
             fps=args.fps,
             vcodec=args.vcodec,
         ),
+        *build_reset_time_argv(args),
         "--rlt.enable=true",
         "--rlt.skip_prefix_recording=true",
         "--rlt.rl_phase_key_toggles_episode=true",
@@ -130,6 +208,12 @@ def build_segment_policy_argv(args: argparse.Namespace) -> list[str]:
         vla_path=args.vla_path,
         rl_token_path=args.rl_token_path,
     )
+
+
+def build_reset_time_argv(args: argparse.Namespace) -> list[str]:
+    if args.reset_time_s is None:
+        return []
+    return [f"--dataset.reset_time_s={args.reset_time_s}"]
 
 
 def print_segment_summary(args: argparse.Namespace, paths) -> None:
@@ -178,6 +262,8 @@ def run_full(args: argparse.Namespace) -> None:
                 policy_path=args.policy_path,
                 vla_path=args.vla_path,
                 rl_token_path=args.rl_token_path,
+                phase_mode=args.phase_mode,
+                chunk_exec_steps=args.chunk_exec_steps,
             ),
             *build_dataset_argv(
                 dataset_name=paths.dataset_name,
@@ -188,6 +274,7 @@ def run_full(args: argparse.Namespace) -> None:
                 fps=args.fps,
                 vcodec=args.vcodec,
             ),
+            *build_reset_time_argv(args),
             *build_rtc_argv(
                 enabled=args.rtc,
                 execution_horizon=args.rtc_execution_horizon,
@@ -204,7 +291,9 @@ def run_full(args: argparse.Namespace) -> None:
         if args.dry_run:
             print(" ".join(sys.argv))
             return
-        prepare_lerobot_runtime()
+        prepare_lerobot_runtime(
+            full_pedal_outcome_window_s=args.double_tap_window_s if args.pedal_outcome else None
+        )
         from lerobot.scripts.lerobot_rlt_record import record
 
         record()
