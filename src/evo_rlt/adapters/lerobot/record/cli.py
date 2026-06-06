@@ -23,7 +23,7 @@ def add_common_record_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_rtc_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--rtc", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--rtc", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--rtc-execution-horizon", type=int, default=10)
     parser.add_argument("--rtc-max-guidance-weight", type=float, default=10.0)
     parser.add_argument(
