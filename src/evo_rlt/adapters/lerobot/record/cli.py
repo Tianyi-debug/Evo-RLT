@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import argparse
+
+from evo_rlt.adapters.lerobot.record.runner import run_full, run_live, run_segment
+
+
+def add_common_record_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--initial-source", choices=["vla", "teleop"], required=True)
+    parser.add_argument("--policy-path", default=None)
+    parser.add_argument("--vla-path", default=None)
+    parser.add_argument("--rl-token-path", default=None)
+    parser.add_argument("--task", default="Insert the copper screw into the black sleeve.")
+    parser.add_argument("--num-episodes", type=int, default=1)
+    parser.add_argument("--episode-time-s", type=int, default=3000)
+    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--setup-json", default=None)
+    parser.add_argument("--dataset-tag", default=None)
+    parser.add_argument("--vcodec", default="h264")
+    parser.add_argument("--no-teleop", action="store_true", default=False)
+    parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--dry-run", action="store_true", default=False)
+
+
+def add_rtc_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--rtc", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--rtc-execution-horizon", type=int, default=10)
+    parser.add_argument("--rtc-max-guidance-weight", type=float, default=10.0)
+    parser.add_argument(
+        "--rtc-prefix-attention-schedule",
+        default="EXP",
+        choices=["EXP", "LINEAR", "ONES", "ZEROS"],
+    )
+    parser.add_argument("--rtc-action-queue-size-to-get-new-actions", type=int, default=None)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Unified real-robot recording entrypoint")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    segment = subparsers.add_parser(
+        "segment",
+        help="Record only the key segment. Success/failure labels apply to the segment.",
+    )
+    add_common_record_args(segment)
+    add_rtc_args(segment)
+    segment.add_argument("--critical-source", choices=["rlt", "vla"], required=True)
+    segment.add_argument("--double-tap-window-s", type=float, default=0.6)
+    segment.add_argument("--vla-ref", action=argparse.BooleanOptionalAction, default=True)
+    segment.add_argument("--chunk-exec-steps", type=int, default=25)
+    segment.add_argument("--intervention-action-blend-time-s", type=float, default=0.4)
+    segment.add_argument("--preflight", action=argparse.BooleanOptionalAction, default=True)
+    segment.set_defaults(func=run_segment)
+
+    full = subparsers.add_parser(
+        "full",
+        help="Record the full trajectory. Success/failure labels apply to the trajectory.",
+    )
+    add_common_record_args(full)
+    add_rtc_args(full)
+    full.set_defaults(func=run_full)
+
+    live = subparsers.add_parser("live", help="Run policy live on the robot without saving a dataset.")
+    live.add_argument("--policy-path", required=True)
+    live.add_argument("--eval-script", required=True)
+    live.add_argument("--vla-path", default=None)
+    live.add_argument("--rl-token-path", default=None)
+    live.add_argument("--phase-mode", default="always_vla")
+    live.add_argument("--chunk-exec-steps", type=int, default=25)
+    live.add_argument("--task", default="Insert the copper screw into the black sleeve.")
+    live.add_argument("--duration", type=float, default=120.0)
+    live.add_argument("--fps", type=float, default=30.0)
+    live.add_argument("--setup-json", default=None)
+    live.add_argument("--dry-run", action="store_true", default=False)
+    add_rtc_args(live)
+    live.set_defaults(func=run_live)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command in {"segment", "full"} and args.dataset_tag is None:
+        args.dataset_tag = f"{args.initial_source}_{args.command}"
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
