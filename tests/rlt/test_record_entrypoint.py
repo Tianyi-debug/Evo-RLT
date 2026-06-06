@@ -18,7 +18,7 @@ def test_initial_source_rejects_rlt():
         ])
 
 
-def test_segment_defaults_to_rtc_enabled():
+def test_segment_defaults_to_rtc_disabled():
     parser = build_parser()
     args = parser.parse_args([
         "segment",
@@ -29,7 +29,7 @@ def test_segment_defaults_to_rtc_enabled():
         "--policy-path",
         "/tmp/ac",
     ])
-    assert args.rtc is True
+    assert args.rtc is False
 
 
 def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
