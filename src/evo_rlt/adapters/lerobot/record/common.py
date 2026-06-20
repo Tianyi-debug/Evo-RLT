@@ -241,6 +241,7 @@ def build_rtc_argv(
     execution_horizon: int,
     max_guidance_weight: float,
     prefix_attention_schedule: str,
+    vla_execution_horizon: int | None,
     action_queue_size_to_get_new_actions: int | None,
 ) -> list[str]:
     argv = [
@@ -249,6 +250,8 @@ def build_rtc_argv(
         f"--rlt.rtc_max_guidance_weight={max_guidance_weight}",
         f"--rlt.rtc_prefix_attention_schedule={prefix_attention_schedule}",
     ]
+    if vla_execution_horizon is not None:
+        argv.append(f"--rlt.vla_rtc_execution_horizon={vla_execution_horizon}")
     if action_queue_size_to_get_new_actions is not None:
         argv.append(
             "--rlt.rtc_action_queue_size_to_get_new_actions="

@@ -112,6 +112,106 @@ def _patch_full_pedal_outcome_listener(double_tap_window_s: float) -> None:
     control_utils.init_keyboard_listener = init_keyboard_listener
 
 
+def run_collect(args: argparse.Namespace) -> None:
+    set_offline_env()
+    setup = load_robot_setup(args.setup_json)
+    paths = resolve_run_paths(setup.setup, args.dataset_tag, "eval_vla_rlt_vla")
+    configure_logging(paths.log_file, args.log_level)
+    remove_existing_dataset(paths.dataset_root)
+    teleop_argv = build_teleop_argv(setup.leaders, args.no_teleop)
+
+    if args.policy_path is None:
+        raise ValueError("default collection requires --policy-path")
+    if not teleop_argv:
+        raise ValueError("default VLA-RLT-VLA collection requires leader teleop arms")
+
+    leader_cal_dir = None
+    with TemporaryDirectory(prefix="record-collect-") as cal_dir:
+        stage_follower_calibrations(setup.followers, cal_dir)
+        leader_cal_dir = stage_leader_calibrations(setup.leaders, teleop_argv)
+        sys.argv = build_default_collect_record_argv(args, setup, paths, cal_dir, teleop_argv)
+        print_collect_summary(args, paths)
+        if args.dry_run:
+            print("\nDry run argv:")
+            print(" ".join(sys.argv))
+            return
+
+        prepare_lerobot_runtime()
+        from lerobot.scripts.lerobot_rlt_record import record
+
+        record()
+
+    if leader_cal_dir is not None:
+        leader_cal_dir.cleanup()
+
+
+def build_default_collect_record_argv(
+    args: argparse.Namespace,
+    setup,
+    paths,
+    cal_dir: str,
+    teleop_argv: list[str],
+) -> list[str]:
+    argv = [
+        "record_collect",
+        *build_robot_argv(setup.followers, setup.left_cameras, setup.right_cameras, cal_dir),
+        *teleop_argv,
+        *build_policy_overrides(
+            policy_path=args.policy_path,
+            vla_path=args.vla_path,
+            rl_token_path=args.rl_token_path,
+            phase_mode="manual",
+        ),
+        *build_dataset_argv(
+            dataset_name=paths.dataset_name,
+            dataset_root=paths.dataset_root,
+            task=args.task,
+            num_episodes=args.num_episodes,
+            episode_time_s=args.episode_time_s,
+            fps=args.fps,
+            vcodec=args.vcodec,
+        ),
+        "--rlt.enable=true",
+        "--rlt.rl_phase_key_toggles_critical_phase=true",
+        f"--rlt.rl_phase_double_tap_window_s={args.double_tap_window_s}",
+        *build_rtc_argv(
+            enabled=args.rtc,
+            execution_horizon=args.rtc_execution_horizon,
+            max_guidance_weight=args.rtc_max_guidance_weight,
+            prefix_attention_schedule=args.rtc_prefix_attention_schedule,
+            vla_execution_horizon=args.vla_rtc_execution_horizon,
+            action_queue_size_to_get_new_actions=args.rtc_action_queue_size_to_get_new_actions,
+        ),
+        "--intervention_state_machine_enabled=true",
+        f"--policy_sync_to_teleop={'true' if teleop_argv else 'false'}",
+        f"--vla_ref={'true' if args.vla_ref else 'false'}",
+        f"--play_sounds={'true' if args.play_sounds else 'false'}",
+    ]
+    return argv
+
+
+def print_collect_summary(args: argparse.Namespace, paths) -> None:
+    vla_horizon = args.vla_rtc_execution_horizon or args.rtc_execution_horizon
+    print("\nDefault VLA-RLT-VLA collection")
+    print(f"Dataset: {paths.dataset_name} -> {paths.dataset_root}")
+    print(f"Log: {paths.log_file}")
+    print(f"Policy: {args.policy_path}")
+    print(f"VLA: {args.vla_path}")
+    print(f"RL token: {args.rl_token_path}")
+    print(
+        "RTC: "
+        f"enabled={args.rtc} rlt_horizon={args.rtc_execution_horizon} "
+        f"vla_horizon={vla_horizon} guidance={args.rtc_max_guidance_weight} "
+        f"schedule={args.rtc_prefix_attention_schedule} "
+        f"refill_threshold={args.rtc_action_queue_size_to_get_new_actions}"
+    )
+    print(
+        "Critical phase mode: r starts RLT; r ends the critical phase as success; "
+        "r+r inside "
+        f"{args.double_tap_window_s:.1f}s marks failure. The episode then continues in VLA mode."
+    )
+
+
 def run_segment(args: argparse.Namespace) -> None:
     set_offline_env()
     setup = load_robot_setup(args.setup_json)
@@ -183,11 +283,15 @@ def build_segment_record_argv(args, setup, paths, cal_dir: str, teleop_argv: lis
             execution_horizon=args.rtc_execution_horizon,
             max_guidance_weight=args.rtc_max_guidance_weight,
             prefix_attention_schedule=args.rtc_prefix_attention_schedule,
+            vla_execution_horizon=args.vla_rtc_execution_horizon,
             action_queue_size_to_get_new_actions=args.rtc_action_queue_size_to_get_new_actions,
         ),
         "--enable_episode_outcome_labeling=true",
         "--intervention_state_machine_enabled=true",
-        f"--policy_sync_to_teleop={'true' if teleop_argv and args.critical_source in {'rlt', 'vla'} else 'false'}",
+        (
+            "--policy_sync_to_teleop="
+            f"{'true' if teleop_argv and args.critical_source in {'rlt', 'vla'} else 'false'}"
+        ),
         f"--vla_ref={'true' if args.vla_ref else 'false'}",
         "--play_sounds=true",
     ]
@@ -217,13 +321,15 @@ def build_reset_time_argv(args: argparse.Namespace) -> list[str]:
 
 
 def print_segment_summary(args: argparse.Namespace, paths) -> None:
+    vla_horizon = args.vla_rtc_execution_horizon or args.rtc_execution_horizon
     print(f"\nDataset: {paths.dataset_name} -> {paths.dataset_root}")
     print(f"Log: {paths.log_file}")
     print(f"Initial source: {args.initial_source}")
     print(f"Critical source: {args.critical_source}")
     print(
         "RTC: "
-        f"enabled={args.rtc} horizon={args.rtc_execution_horizon} "
+        f"enabled={args.rtc} rlt_horizon={args.rtc_execution_horizon} "
+        f"vla_horizon={vla_horizon} "
         f"guidance={args.rtc_max_guidance_weight} "
         f"schedule={args.rtc_prefix_attention_schedule} "
         f"refill_threshold={args.rtc_action_queue_size_to_get_new_actions or 'chunk_length-1'}"
@@ -280,6 +386,7 @@ def run_full(args: argparse.Namespace) -> None:
                 execution_horizon=args.rtc_execution_horizon,
                 max_guidance_weight=args.rtc_max_guidance_weight,
                 prefix_attention_schedule=args.rtc_prefix_attention_schedule,
+                vla_execution_horizon=args.vla_rtc_execution_horizon,
                 action_queue_size_to_get_new_actions=args.rtc_action_queue_size_to_get_new_actions,
             ),
             "--enable_episode_outcome_labeling=true",

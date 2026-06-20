@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
-from evo_rlt.adapters.lerobot.record.runner import run_full, run_live, run_segment
+from evo_rlt.adapters.lerobot.record.runner import run_collect, run_full, run_live, run_segment
+
+
+DEFAULT_COLLECT_POLICY_PATH = "/home/kye/rlt_deploy/ac_online_base_0528"
+DEFAULT_COLLECT_VLA_PATH = (
+    "/home/kye/.cache/huggingface/hub/models--Shiki42--pi05_screw_c_mix_cont15k_fp16/"
+    "snapshots/668591948e727e197eeed872a7e37fd669114779/online_base_vla_0528.pt"
+)
+DEFAULT_COLLECT_RL_TOKEN_PATH = "/home/kye/rlt_deploy/rlt_online_base_0528"
+DEFAULT_COLLECT_DATASET_TAG = "vla_rlt_vla_test"
+DEFAULT_COLLECT_TASK = "Insert the copper screw into the black sleeve."
 
 
 def add_common_record_args(parser: argparse.ArgumentParser) -> None:
@@ -23,21 +34,63 @@ def add_common_record_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dry-run", action="store_true", default=False)
 
 
-def add_rtc_args(parser: argparse.ArgumentParser) -> None:
+def add_rtc_args(
+    parser: argparse.ArgumentParser,
+    *,
+    execution_horizon_default: int = 10,
+    vla_execution_horizon_default: int | None = None,
+    action_queue_default: int | None = None,
+) -> None:
     parser.add_argument("--rtc", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--rtc-execution-horizon", type=int, default=10)
+    parser.add_argument("--rtc-execution-horizon", type=int, default=execution_horizon_default)
+    parser.add_argument("--vla-rtc-execution-horizon", type=int, default=vla_execution_horizon_default)
     parser.add_argument("--rtc-max-guidance-weight", type=float, default=10.0)
     parser.add_argument(
         "--rtc-prefix-attention-schedule",
         default="EXP",
         choices=["EXP", "LINEAR", "ONES", "ZEROS"],
     )
-    parser.add_argument("--rtc-action-queue-size-to-get-new-actions", type=int, default=None)
+    parser.add_argument(
+        "--rtc-action-queue-size-to-get-new-actions",
+        type=int,
+        default=action_queue_default,
+    )
+
+
+def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--policy-path", default=DEFAULT_COLLECT_POLICY_PATH)
+    parser.add_argument("--vla-path", default=DEFAULT_COLLECT_VLA_PATH)
+    parser.add_argument("--rl-token-path", default=DEFAULT_COLLECT_RL_TOKEN_PATH)
+    parser.add_argument("--task", default=DEFAULT_COLLECT_TASK)
+    parser.add_argument("--num-episodes", type=int, default=5)
+    parser.add_argument("--episode-time-s", type=int, default=3000)
+    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--setup-json", default=None)
+    parser.add_argument("--dataset-tag", default=DEFAULT_COLLECT_DATASET_TAG)
+    parser.add_argument("--vcodec", default="h264")
+    parser.add_argument("--no-teleop", action="store_true", default=False)
+    parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--double-tap-window-s", type=float, default=0.6)
+    parser.add_argument("--vla-ref", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--play-sounds", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--dry-run", action="store_true", default=False)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified real-robot recording entrypoint")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    collect = subparsers.add_parser(
+        "collect",
+        help="Run the default VLA-RLT-VLA real-robot data collection script.",
+    )
+    add_default_collect_args(collect)
+    add_rtc_args(
+        collect,
+        vla_execution_horizon_default=25,
+        action_queue_default=30,
+    )
+    collect.set_defaults(func=run_collect)
 
     segment = subparsers.add_parser(
         "segment",
@@ -88,6 +141,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command in {"segment", "full"} and args.dataset_tag is None:
         args.dataset_tag = f"{args.initial_source}_{args.command}"
     args.func(args)
+
+
+def collect_default_main(argv: list[str] | None = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    main(["collect", *args])
 
 
 if __name__ == "__main__":

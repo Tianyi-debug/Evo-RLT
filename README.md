@@ -239,3 +239,32 @@ Citation information will be added with the paper release.
 ## License
 
 This project follows the Evo-RL release convention and is distributed under the Apache-2.0 license.
+
+## Default real-robot data collection
+
+On the lab bimanual setup, the default VLA-RLT-VLA collection command is:
+
+```bash
+cd /home/kye/evo-rlt
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate evo-rl
+
+PYTHONPATH=src HF_HUB_OFFLINE=1 python -m evo_rlt.adapters.lerobot.record collect
+```
+
+It reads the robot manifest from `~/.roboclaw/workspace/embodied/manifest.json`, stages follower
+and leader calibrations into temporary LeRobot-compatible names, and writes datasets under:
+
+```text
+~/.roboclaw/workspace/embodied/datasets/<MMDD>_vla_rlt_vla_test/eval_vla_rlt_vla_<HHMMSS>
+```
+
+The default command preserves the validated RTC chunk settings from the best real-robot script:
+
+```text
+RLT RTC execution horizon: 10
+VLA RTC execution horizon: 25
+RTC action queue refill threshold: 30
+```
+
+The same defaults are exposed as `evo-rlt-collect-default` after reinstalling package entry points.
