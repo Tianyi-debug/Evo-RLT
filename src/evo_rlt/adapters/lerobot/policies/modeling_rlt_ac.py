@@ -101,6 +101,8 @@ class ChunkACPolicy(PreTrainedPolicy):
         # zeroed VLA reference chunk in RL phase (mirrors training ref-dropout).
         self.vla_ref: bool = True
         self._rtc_config: RTCConfig | None = None
+        self._vla_rtc_config: RTCConfig | None = None
+        self._active_pi05_rtc_config: RTCConfig | None = None
         self._rtc_action_queue: ActionQueue | None = None
         self._rtc_latency_tracker: LatencyTracker | None = None
         self._rtc_fps: float = 30.0
@@ -267,6 +269,7 @@ class ChunkACPolicy(PreTrainedPolicy):
         rtc_config: RTCConfig,
         fps: float,
         action_queue_size_to_get_new_actions: int | None = None,
+        vla_rtc_config: RTCConfig | None = None,
     ) -> None:
         """Enable RTC chunk replacement for deployment-time ``select_action``.
 
@@ -277,11 +280,10 @@ class ChunkACPolicy(PreTrainedPolicy):
         if fps <= 0:
             raise ValueError(f"fps must be positive, got {fps}")
 
-        pi05 = self._rl_token_policy._pi05
-        pi05.config.rtc_config = rtc_config
-        pi05.init_rtc_processor()
-
         self._rtc_config = rtc_config
+        self._vla_rtc_config = vla_rtc_config or rtc_config
+        self._active_pi05_rtc_config = None
+        self._set_pi05_rtc_config(rtc_config)
         self._rtc_action_queue = ActionQueue(rtc_config)
         self._rtc_latency_tracker = LatencyTracker()
         self._rtc_fps = float(fps)
@@ -297,6 +299,21 @@ class ChunkACPolicy(PreTrainedPolicy):
     @property
     def _rtc_runtime_enabled(self) -> bool:
         return self._rtc_config is not None
+
+    def _rtc_config_for_phase(self, mod: RLTActionModifier) -> RTCConfig:
+        if self._rtc_config is None:
+            raise RuntimeError("RTC runtime is not configured")
+        if not mod.is_rl_phase and self._vla_rtc_config is not None:
+            return self._vla_rtc_config
+        return self._rtc_config
+
+    def _set_pi05_rtc_config(self, rtc_config: RTCConfig) -> None:
+        if self._active_pi05_rtc_config is rtc_config:
+            return
+        pi05 = self._rl_token_policy._pi05
+        pi05.config.rtc_config = rtc_config
+        pi05.init_rtc_processor()
+        self._active_pi05_rtc_config = rtc_config
 
     def _clone_rtc_batch(self, batch: dict[str, Any]) -> dict[str, Any]:
         cloned: dict[str, Any] = {}
@@ -373,7 +390,11 @@ class ChunkACPolicy(PreTrainedPolicy):
         request_start_time: float,
         generation: int,
     ) -> None:
-        if self._rtc_action_queue is None or self._rtc_latency_tracker is None or self._rtc_config is None:
+        if (
+            self._rtc_action_queue is None
+            or self._rtc_latency_tracker is None
+            or self._rtc_config is None
+        ):
             raise RuntimeError("RTC runtime is not configured")
         if generation != self._rtc_generation:
             return
@@ -388,6 +409,7 @@ class ChunkACPolicy(PreTrainedPolicy):
                 inference_delay=inference_delay,
                 prev_chunk_left_over=prev_actions,
             )
+            active_rtc_config = self._active_pi05_rtc_config or self._rtc_config
             if chunk.shape[0] != 1:
                 raise ValueError(f"RTC deployment expects batch size 1, got {chunk.shape[0]}")
 
@@ -425,13 +447,13 @@ class ChunkACPolicy(PreTrainedPolicy):
             inference_delay,
             queue_before_merge,
         )
-        min_refill_threshold = self._rtc_config.execution_horizon + estimated_delay
+        min_refill_threshold = active_rtc_config.execution_horizon + estimated_delay
         if self._rtc_action_queue_size_to_get_new_actions < min_refill_threshold:
             log.warning(
                 "[RLT RTC] action_queue_size_to_get_new_actions=%d is smaller than "
                 "execution_horizon + delay (%d + %d). The queue may run dry under load.",
                 self._rtc_action_queue_size_to_get_new_actions,
-                self._rtc_config.execution_horizon,
+                active_rtc_config.execution_horizon,
                 estimated_delay,
             )
 
@@ -508,6 +530,8 @@ class ChunkACPolicy(PreTrainedPolicy):
         self.eval()
         mod = self._ensure_modifier()
         pi05 = self._rl_token_policy._pi05
+        if self._rtc_config is not None:
+            self._set_pi05_rtc_config(self._rtc_config_for_phase(mod))
         vla_chunk = pi05.predict_action_chunk(batch, **kwargs)
         vla_chunk = vla_chunk[:, :, : self.config.action_dim]
         prefix_tokens = self._prefix_capture.consume()
