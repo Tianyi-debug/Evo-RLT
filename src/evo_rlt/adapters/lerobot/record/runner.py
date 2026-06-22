@@ -27,7 +27,11 @@ from evo_rlt.adapters.lerobot.record.common import (
 log = logging.getLogger(__name__)
 
 
-def prepare_lerobot_runtime(*, full_pedal_outcome_window_s: float | None = None) -> None:
+def prepare_lerobot_runtime(
+    *,
+    full_pedal_outcome_window_s: float | None = None,
+    episode_end_pedal_key: str | None = None,
+) -> None:
     register()
     # lerobot_rlt_record imports ChunkACPolicy through this concrete module path.
     import evo_rlt.adapters.lerobot.policies.modeling_rlt_ac as modeling_rlt_ac
@@ -35,6 +39,8 @@ def prepare_lerobot_runtime(*, full_pedal_outcome_window_s: float | None = None)
     sys.modules["lerobot.policies.rlt.modeling_rlt_ac"] = modeling_rlt_ac
     if full_pedal_outcome_window_s is not None:
         _patch_full_pedal_outcome_listener(full_pedal_outcome_window_s)
+    if episode_end_pedal_key is not None:
+        _patch_episode_end_pedal_listener(episode_end_pedal_key)
 
 
 class _CompositeListener:
@@ -46,6 +52,61 @@ class _CompositeListener:
             stop = getattr(listener, "stop", None)
             if callable(stop):
                 stop()
+
+
+class _EpisodeEndPedalListener:
+    def __init__(
+        self, listener_cls, events: dict, pedal_key: str, on_press, *args, **kwargs
+    ):
+        self._events = events
+        self._pedal_key = pedal_key
+        self._on_press = on_press
+        self._listener = listener_cls(self._handle_press, *args, **kwargs)
+
+    def _handle_press(self, key_name: str) -> None:
+        if key_name == self._pedal_key:
+            self._events["exit_early"] = True
+            logging.info("Pedal '%s' pressed -> exit current episode", key_name)
+            return
+        self._on_press(key_name)
+
+    def start(self) -> bool:
+        return self._listener.start()
+
+    def stop(self) -> None:
+        self._listener.stop()
+
+
+def _patch_episode_end_pedal_listener(pedal_key: str) -> None:
+    import lerobot.utils.control_utils as control_utils
+    import lerobot.utils.pedal_listener as pedal_listener
+
+    if getattr(control_utils._start_pedal_listener, "_evo_rlt_episode_end_pedal", False):
+        return
+
+    original_start_pedal_listener = control_utils._start_pedal_listener
+
+    def _start_pedal_listener(events, *args, **kwargs):
+        original_pedal_listener = pedal_listener.PedalListener
+
+        def listener_factory(on_press, *listener_args, **listener_kwargs):
+            return _EpisodeEndPedalListener(
+                original_pedal_listener,
+                events,
+                pedal_key,
+                on_press,
+                *listener_args,
+                **listener_kwargs,
+            )
+
+        pedal_listener.PedalListener = listener_factory
+        try:
+            return original_start_pedal_listener(events, *args, **kwargs)
+        finally:
+            pedal_listener.PedalListener = original_pedal_listener
+
+    _start_pedal_listener._evo_rlt_episode_end_pedal = True
+    control_utils._start_pedal_listener = _start_pedal_listener
 
 
 def _patch_full_pedal_outcome_listener(double_tap_window_s: float) -> None:
@@ -136,7 +197,7 @@ def run_collect(args: argparse.Namespace) -> None:
             print(" ".join(sys.argv))
             return
 
-        prepare_lerobot_runtime()
+        prepare_lerobot_runtime(episode_end_pedal_key="space")
         from lerobot.scripts.lerobot_rlt_record import record
 
         record()

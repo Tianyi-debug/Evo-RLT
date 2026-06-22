@@ -4,6 +4,7 @@ import pytest
 
 from evo_rlt.adapters.lerobot.record.cli import build_parser
 from evo_rlt.adapters.lerobot.record.runner import (
+    _patch_episode_end_pedal_listener,
     build_default_collect_record_argv,
     build_segment_record_argv,
 )
@@ -83,6 +84,52 @@ def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
     assert "--policy_sync_to_teleop=true" in argv
     assert "--policy.path=/tmp/ac" in argv
 
+
+def test_episode_end_pedal_maps_space_to_exit_early(monkeypatch):
+    import lerobot.utils.control_utils as control_utils
+    import lerobot.utils.pedal_listener as pedal_listener
+
+    captured = {}
+
+    class FakePedalListener:
+        def __init__(self, on_press):
+            captured["on_press"] = on_press
+
+        def start(self):
+            return True
+
+        def stop(self):
+            captured["stopped"] = True
+
+    def original_start_pedal_listener(events, *args, **kwargs):
+        from lerobot.utils.pedal_listener import PedalListener
+
+        return PedalListener(lambda key: events.setdefault("forwarded", []).append(key))
+
+    monkeypatch.setattr(control_utils, "_start_pedal_listener", original_start_pedal_listener)
+    monkeypatch.setattr(pedal_listener, "PedalListener", FakePedalListener)
+
+    _patch_episode_end_pedal_listener("space")
+    events = {"exit_early": False}
+    control_utils._start_pedal_listener(
+        events,
+        " ",
+        None,
+        "r",
+        None,
+        None,
+        "s",
+        "f",
+        None,
+        None,
+    )
+
+    captured["on_press"]("space")
+    assert events["exit_early"] is True
+    assert "forwarded" not in events
+
+    captured["on_press"]("r")
+    assert events["forwarded"] == ["r"]
 
 
 def test_default_collect_parser_uses_vla_rlt_vla_defaults():

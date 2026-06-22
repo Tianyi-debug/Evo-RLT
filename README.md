@@ -267,4 +267,13 @@ VLA RTC execution horizon: 25
 RTC action queue refill threshold: 30
 ```
 
+Default collection controls:
+
+```text
+r pedal       toggle RLT critical phase
+space pedal   end the current episode, same as the keyboard right arrow
+left arrow    rerecord the current episode
+Esc           stop data collection
+```
+
 The same defaults are exposed as `evo-rlt-collect-default` after reinstalling package entry points.
