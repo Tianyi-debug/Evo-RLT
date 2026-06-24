@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/huggingface/lerobot"><img alt="lerobot version" src="https://img.shields.io/badge/LeRobot-0.4.4-f59e0b"/></a>
   <a href="#citation"><img alt="paper coming soon" src="https://img.shields.io/static/v1?label=Paper&message=Coming%20Soon&color=9ca3af"/></a>
-  <a href="#model--dataset"><img alt="model and dataset coming soon" src="https://img.shields.io/static/v1?label=Model%20%2F%20Dataset&message=Coming%20Soon&color=9ca3af"/></a>
+  <a href="#model-dataset"><img alt="model and dataset coming soon" src="https://img.shields.io/static/v1?label=Model%20%2F%20Dataset&message=Coming%20Soon&color=9ca3af"/></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/License-Apache--2.0-ef4444"/></a>
 </p>
 
@@ -17,32 +17,40 @@
 
 <p align="center">
   <a href="./website/assets/videos/rlt_rollout.mp4">
-    <img alt="RLT real-robot rollout video preview" src="./website/assets/images/rlt_rollout_preview.jpg" width="96%"/>
+    <img alt="RLT real-robot rollout demo" src="./website/assets/images/rlt_rollout.gif" width="96%"/>
   </a>
 </p>
 
-<p align="center"><a href="./website/assets/videos/rlt_rollout.mp4">Open rlt_rollout.mp4</a></p>
+<p align="center"><a href="./website/assets/videos/rlt_rollout.mp4">Open the MP4 demo</a></p>
 
-## Overview
+## 🎯 Evo-RLT Focus
 
-Evo-RLT is a standalone reproduction repository for RLT. It keeps the algorithmic code under `evo_rlt.core` torch-only, and places LeRobot-specific integration under `evo_rlt.adapters.lerobot` so policy registration, dataset handling, recording, and deployment stay isolated from the algorithm implementation.
+- **Standalone RLT reproduction:** this repository presents RLT as an independent LeRobot-based reproduction for the pi paper, rather than as a branch or submodule of another project.
+- **Open training path:** the code covers VLA finetuning, RL-token learning, transition-cache generation, and chunk actor-critic training.
+- **Real-robot deployment path:** the recording wrapper supports VLA/RLT rollout, RTC defaults, pedal labels, and human-in-the-loop collection.
 
-The project currently supports:
+## 📰 News
 
-- VLA finetuning on LeRobot datasets.
-- RL-token training on top of pi0.5 prefix hidden states.
-- Transition-cache generation for chunk-level offline RL.
-- Chunk actor-critic training for RLT policies.
-- Real-robot recording and deployment wrappers for VLA, RLT, and human-in-the-loop collection.
+- **[2026-06-25]** Added a GitHub-rendered rollout GIF and direct MP4 demo link.
+- **[2026-06-25]** Refreshed the README to describe Evo-RLT as a standalone RLT reproduction and added hardware setup differences from Evo-RL.
 
-## Highlights
+## 🧭 Table of Contents
 
-- **Standalone RLT package:** RLT-specific code lives in `evo_rlt`, while LeRobot integration is registered at runtime.
-- **Deploy-aligned artifacts:** RL-token and actor-critic policies are saved in policy-style directories that deployment scripts can consume directly.
-- **Cache-first offline RL:** expensive VLA/RL-token encoding can be precomputed into transition caches before actor-critic training.
-- **Robot-facing scripts:** the record wrapper supports VLA-only collection, pedal outcome labels, RLT deployment, RTC defaults, and human-in-the-loop workflows.
+| Getting Started | Training Pipeline | Project Info |
+| -------------------------------------- | -------------------------------------------- | ------------------------------------------- |
+| [⚡ Quick Start](#quick-start) | [🧪 Training Pipeline](#training-pipeline) | [🤗 Model & Dataset](#model-dataset) |
+| [🧱 1) Installation](#installation) | [🎛️ 4) Finetune VLA](#finetune-vla) | [🗂️ Repository Layout](#repository-layout) |
+| [🔌 2) Runtime Registration](#runtime-registration) | [🪙 5) Train RL Token](#train-rl-token) | [✅ Development Checks](#development-checks) |
+| [🛠️ 3) Hardware Setup](#hardware-setup) | [📦 6) Build Transition Cache](#build-transition-cache) | [📖 Citation](#citation) / [📄 License](#license) |
+| [🤖 Real-Robot Recording and Deployment](#real-robot-recording-and-deployment) | [🧠 7) Train Chunk Actor-Critic](#train-chunk-actor-critic) | |
 
-## Quick Start
+<a id="quick-start"></a>
+
+## ⚡ Quick Start
+
+<a id="installation"></a>
+
+### 🧱 1) Installation
 
 ```bash
 git clone https://github.com/Shiki42/evo-rlt.git
@@ -60,7 +68,9 @@ If you are using a local LeRobot checkout instead of the package dependency, put
 export PYTHONPATH=/path/to/evo-rlt/src:/path/to/lerobot/src
 ```
 
-## Runtime Registration
+<a id="runtime-registration"></a>
+
+### 🔌 2) Runtime Registration
 
 Evo-RLT keeps policy registration out of LeRobot source files. Before using LeRobot factory helpers with RLT policy types, register the adapter once:
 
@@ -78,7 +88,9 @@ rlt_ac       # chunk actor-critic policy
 rlt          # deployment policy wrapper
 ```
 
-## Hardware Setup
+<a id="hardware-setup"></a>
+
+### 🛠️ 3) Hardware Setup
 
 Use the [Evo-RL hardware setup](https://github.com/MINT-SJTU/Evo-RL#2-hardware-setup) for the shared robot bring-up steps: SO-series assembly, stable serial/camera paths, camera validation, PiPER/PiPER-X CAN setup, and basic teleoperation checks.
 
@@ -150,11 +162,15 @@ Example setup manifest:
 }
 ```
 
-## Training Pipeline
+<a id="training-pipeline"></a>
+
+## 🧪 Training Pipeline
 
 The typical RLT workflow has four stages.
 
-### 1. Finetune VLA
+<a id="finetune-vla"></a>
+
+### 🎛️ 4) Finetune VLA
 
 Use LeRobot's training entrypoint to finetune a pi0.5 VLA checkpoint on a LeRobot dataset.
 
@@ -173,7 +189,9 @@ python -m lerobot.scripts.lerobot_train \
   --job_name=vla_ft
 ```
 
-### 2. Train RL Token
+<a id="train-rl-token"></a>
+
+### 🪙 5) Train RL Token
 
 ```bash
 python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerobot.scripts.lerobot_train import main; main()' \
@@ -193,7 +211,9 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --job_name=rl_token
 ```
 
-### 3. Build Transition Cache
+<a id="build-transition-cache"></a>
+
+### 📦 6) Build Transition Cache
 
 ```bash
 evo-rlt-build-transition-cache-v2 \
@@ -211,7 +231,9 @@ evo-rlt-build-transition-cache-v2 \
   --device cuda
 ```
 
-### 4. Train Chunk Actor-Critic
+<a id="train-chunk-actor-critic"></a>
+
+### 🧠 7) Train Chunk Actor-Critic
 
 ```bash
 python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerobot.scripts.lerobot_train import main; main()' \
@@ -234,7 +256,9 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --job_name=rlt_ac
 ```
 
-## Real-Robot Recording and Deployment
+<a id="real-robot-recording-and-deployment"></a>
+
+## 🤖 Real-Robot Recording and Deployment
 
 Set up the environment before running robot commands:
 
@@ -308,7 +332,9 @@ single tap    success, end current episode, start next episode
 double tap    failure, end current episode, start next episode
 ```
 
-## Repository Layout
+<a id="repository-layout"></a>
+
+## 🗂️ Repository Layout
 
 ```text
 src/evo_rlt/core                  # algorithm core, torch-only
@@ -317,21 +343,29 @@ src/evo_rlt/cli                   # training and cache CLIs
 tests/rlt                         # focused RLT unit and integration tests
 ```
 
-## Development Checks
+<a id="development-checks"></a>
+
+## ✅ Development Checks
 
 ```bash
 PYTHONPATH=src pytest -q tests/rlt
 PYTHONPATH=src python -m compileall -q src/evo_rlt tests/rlt
 ```
 
-## Model & Dataset
+<a id="model-dataset"></a>
 
-Models and datasets will be linked here after public release. The current rollout demo is available above as `website/assets/videos/rlt_rollout.mp4`.
+## 🤗 Model & Dataset
 
-## Citation
+Models and datasets will be linked here after public release. The rollout demo is available above as `website/assets/images/rlt_rollout.gif`, with the original MP4 at `website/assets/videos/rlt_rollout.mp4`.
+
+<a id="citation"></a>
+
+## 📖 Citation
 
 Citation information will be added with the paper release.
 
-## License
+<a id="license"></a>
+
+## 📄 License
 
 Apache-2.0. See [LICENSE](./LICENSE).
