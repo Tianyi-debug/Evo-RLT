@@ -8,18 +8,18 @@ import json
 import logging
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
-from huggingface_hub import hf_hub_download
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
+
+from evo_rlt.experimental.model_path_resolution import RLModelPaths, resolve_rl_model_paths
 
 log = logging.getLogger(__name__)
 
@@ -32,23 +32,9 @@ JOINT_TYPES = [
     "gripper",
 ]
 WINDOW = 60
-DEFAULT_VLA_MODEL = "Elvinky/pi05_full_mix_562ep_sft_fp32"
-DEFAULT_RL_VLA_MODEL = "Elvinky/pi05_screw_271ep_sft_fp32"
-DEFAULT_HF_REPO = "Shiki42/rlt_pi0.5_screw"
-DEFAULT_RL_TOKEN_PATH = "rl_token/271ep_pi0.5_screw_sft_rltoken/demo_adapt_checkpoint.pt"
-DEFAULT_RL_CONFIG_PATH = "rl_token/271ep_pi0.5_screw_sft_rltoken/pi05_rlt.yaml"
-DEFAULT_AC_PATH = "rl_token/271ep_pi0.5_screw_sft_rltoken/actor_critic/0412_278cp_warmup/rl_checkpoint.pt"
-DEFAULT_AC_METRICS_PATH = "rl_token/271ep_pi0.5_screw_sft_rltoken/actor_critic/0412_278cp_warmup/metrics.json"
 VIDEO_FRAME_WIDTH = 320
 
 
-@dataclass
-class RLModelPaths:
-    vla_model: str
-    rl_token_ckpt: str
-    ac_ckpt: str
-    config_path: str
-    metrics_path: str | None
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,8 +53,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--vla-model",
-        default=DEFAULT_VLA_MODEL,
-        help="Standalone VLA model used for the VLA curves.",
+        default="",
+        help="Standalone VLA model path or HF model id used for the VLA curves.",
     )
     parser.add_argument(
         "--no-vla",
@@ -78,33 +64,53 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--rl-vla-model",
-        default=DEFAULT_RL_VLA_MODEL,
-        help="VLA backbone used inside the RL policy.",
+        default="",
+        help="VLA backbone path or HF model id used inside the RL policy.",
     )
     parser.add_argument(
         "--rl-token-ckpt",
         default="",
-        help="RL token checkpoint. Empty means use latest warmup default from HF.",
+        help="Local RL token checkpoint path.",
+    )
+    parser.add_argument(
+        "--rl-token-path-in-repo",
+        default="",
+        help="HF repo-relative RL token checkpoint path, used with --hf-repo.",
     )
     parser.add_argument(
         "--ac-ckpt",
         default="",
-        help="Actor-critic checkpoint. Empty means use latest warmup default from HF.",
+        help="Local actor-critic checkpoint path.",
+    )
+    parser.add_argument(
+        "--ac-path-in-repo",
+        default="",
+        help="HF repo-relative actor-critic checkpoint path, used with --hf-repo.",
     )
     parser.add_argument(
         "--rl-config",
         default="",
-        help="Optional RLT yaml config. Empty means use latest warmup default from HF.",
+        help="Local RLT yaml config path.",
+    )
+    parser.add_argument(
+        "--rl-config-path-in-repo",
+        default="",
+        help="HF repo-relative RLT yaml config path, used with --hf-repo.",
     )
     parser.add_argument(
         "--ac-metrics",
         default="",
-        help="Optional metrics.json next to the AC checkpoint for architecture metadata.",
+        help="Optional local metrics.json next to the AC checkpoint for architecture metadata.",
+    )
+    parser.add_argument(
+        "--ac-metrics-path-in-repo",
+        default="",
+        help="Optional HF repo-relative metrics.json path, used with --hf-repo.",
     )
     parser.add_argument(
         "--hf-repo",
-        default=DEFAULT_HF_REPO,
-        help="HF repo used to resolve default RL warmup checkpoints.",
+        default="",
+        help="Optional HF repo used with repo-relative checkpoint/config paths.",
     )
     parser.add_argument(
         "--no-rl",
@@ -236,32 +242,6 @@ def run_vla_inference(
     return np.array(actions)
 
 
-def resolve_hf_file(repo_id: str, path_in_repo: str) -> str:
-    return hf_hub_download(repo_id=repo_id, filename=path_in_repo)
-
-
-def resolve_rl_model_paths(args: argparse.Namespace) -> RLModelPaths:
-    if args.no_rl:
-        raise ValueError("RL model resolution requested while --no-rl is set")
-
-    rl_token_ckpt = args.rl_token_ckpt or resolve_hf_file(args.hf_repo, DEFAULT_RL_TOKEN_PATH)
-    ac_ckpt = args.ac_ckpt or resolve_hf_file(args.hf_repo, DEFAULT_AC_PATH)
-    config_path = args.rl_config or resolve_hf_file(args.hf_repo, DEFAULT_RL_CONFIG_PATH)
-    metrics_path = args.ac_metrics or None
-    if metrics_path is None:
-        sibling_metrics = Path(ac_ckpt).parent / "metrics.json"
-        if sibling_metrics.exists():
-            metrics_path = str(sibling_metrics)
-    if metrics_path is None:
-        metrics_path = resolve_hf_file(args.hf_repo, DEFAULT_AC_METRICS_PATH)
-
-    return RLModelPaths(
-        vla_model=args.rl_vla_model,
-        rl_token_ckpt=rl_token_ckpt,
-        ac_ckpt=ac_ckpt,
-        config_path=config_path,
-        metrics_path=metrics_path,
-    )
 
 
 def load_ac_metadata(ac_ckpt_path: str, metrics_path: str | None) -> tuple[dict, dict]:
@@ -899,6 +879,8 @@ def main() -> None:
     )
     if args.no_vla and args.no_rl:
         raise ValueError("At least one of VLA or RL must be enabled.")
+    if not args.no_vla and not args.vla_model:
+        raise ValueError("--vla-model is required unless --no-vla is set")
 
     dataset = load_dataset(args.dataset_path, args.repo_id, args.episode_index)
     fps = dataset.meta.fps

@@ -6,12 +6,6 @@ import sys
 from evo_rlt.adapters.lerobot.record.runner import run_collect, run_full, run_live, run_segment
 
 
-DEFAULT_COLLECT_POLICY_PATH = "/home/kye/rlt_deploy/ac_online_base_0528"
-DEFAULT_COLLECT_VLA_PATH = (
-    "/home/kye/.cache/huggingface/hub/models--Shiki42--pi05_screw_c_mix_cont15k_fp16/"
-    "snapshots/668591948e727e197eeed872a7e37fd669114779/online_base_vla_0528.pt"
-)
-DEFAULT_COLLECT_RL_TOKEN_PATH = "/home/kye/rlt_deploy/rlt_online_base_0528"
 DEFAULT_COLLECT_DATASET_TAG = "vla_rlt_vla_test"
 DEFAULT_COLLECT_TASK = "Insert the copper screw into the black sleeve."
 
@@ -58,9 +52,9 @@ def add_rtc_args(
 
 
 def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--policy-path", default=DEFAULT_COLLECT_POLICY_PATH)
-    parser.add_argument("--vla-path", default=DEFAULT_COLLECT_VLA_PATH)
-    parser.add_argument("--rl-token-path", default=DEFAULT_COLLECT_RL_TOKEN_PATH)
+    parser.add_argument("--policy-path", required=True)
+    parser.add_argument("--vla-path", default=None)
+    parser.add_argument("--rl-token-path", default=None)
     parser.add_argument("--task", default=DEFAULT_COLLECT_TASK)
     parser.add_argument("--num-episodes", type=int, default=5)
     parser.add_argument("--episode-time-s", type=int, default=3000)
@@ -73,6 +67,25 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--double-tap-window-s", type=float, default=0.6)
     parser.add_argument("--vla-ref", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--play-sounds", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--rlt-toggle-key", default="r")
+    parser.add_argument("--teleop-toggle-key", default="space")
+    parser.add_argument("--episode-outcome-key", default="e")
+    parser.add_argument(
+        "--start-with-teleop",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Start each episode in teleop instead of VLA.",
+    )
+    parser.add_argument(
+        "--only-critical",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Record only the RLT critical segment. The first RLT key press starts "
+            "recording; ending RLT saves the episode. The default records the whole "
+            "VLA/RLT/teleop trajectory until the episode outcome key is pressed."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", default=False)
 
 
@@ -115,6 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     full.add_argument("--phase-mode", default=None)
     full.add_argument("--chunk-exec-steps", type=int, default=None)
     full.add_argument("--pedal-outcome", action=argparse.BooleanOptionalAction, default=False)
+    full.add_argument("--episode-outcome-key", default="r")
     full.add_argument("--double-tap-window-s", type=float, default=0.6)
     full.set_defaults(func=run_full)
 

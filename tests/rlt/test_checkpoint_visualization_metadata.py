@@ -57,6 +57,10 @@ def test_resolve_rl_model_paths_prefers_checkpoint_sibling_metrics(tmp_path):
         ac_metrics="",
         hf_repo="unused",
         rl_vla_model="unused-vla",
+        rl_token_path_in_repo="",
+        ac_path_in_repo="",
+        rl_config_path_in_repo="",
+        ac_metrics_path_in_repo="",
     )
 
     paths = resolve_rl_model_paths(args)

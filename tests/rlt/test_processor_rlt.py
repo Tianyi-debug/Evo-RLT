@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import pathlib
 
 import pytest
@@ -14,16 +15,19 @@ from evo_rlt.adapters.lerobot.policies.processor_rlt_ac import (
 from evo_rlt.adapters.lerobot.policies.processor_rlt_common import load_sft_pi05_processors
 from evo_rlt.adapters.lerobot.policies.processor_rlt_token import make_rlt_token_pre_post_processors
 
-_SFT_PI05_DIR = pathlib.Path("/home/coder/share/policy_pi05_screw")
+_SFT_PI05_DIR_ENV = os.environ.get("EVO_RLT_TEST_SFT_PI05_DIR")
+_SFT_PI05_DIR = pathlib.Path(_SFT_PI05_DIR_ENV) if _SFT_PI05_DIR_ENV else None
 
 _HAS_SFT = (
-    _SFT_PI05_DIR.exists()
+    _SFT_PI05_DIR is not None
+    and _SFT_PI05_DIR.exists()
     and (_SFT_PI05_DIR / "policy_preprocessor.json").exists()
     and (_SFT_PI05_DIR / "policy_postprocessor.json").exists()
 )
 
 requires_sft = pytest.mark.skipif(
-    not _HAS_SFT, reason=f"SFT pi05 ckpt not available at {_SFT_PI05_DIR}"
+    not _HAS_SFT,
+    reason="Set EVO_RLT_TEST_SFT_PI05_DIR to a pi0.5 checkpoint with processor files",
 )
 
 

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import logging
 import runpy
 import sys
+import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from evo_rlt.adapters.lerobot import register
 from evo_rlt.adapters.lerobot.record.common import (
@@ -29,18 +32,31 @@ log = logging.getLogger(__name__)
 
 def prepare_lerobot_runtime(
     *,
-    full_pedal_outcome_window_s: float | None = None,
-    episode_end_pedal_key: str | None = None,
+    double_tap_episode_outcome_key: str | None = None,
+    double_tap_episode_outcome_window_s: float | None = None,
+    intervention_toggle_key: str | None = None,
+    skip_policyless_reset_loop: bool = False,
+    background_episode_video_encoding: bool = False,
 ) -> None:
+    if double_tap_episode_outcome_key is not None:
+        if double_tap_episode_outcome_window_s is None:
+            raise ValueError("double_tap_episode_outcome_window_s is required")
+        _patch_double_tap_episode_outcome_listener(
+            double_tap_episode_outcome_window_s,
+            double_tap_episode_outcome_key,
+        )
     register()
     # lerobot_rlt_record imports ChunkACPolicy through this concrete module path.
     import evo_rlt.adapters.lerobot.policies.modeling_rlt_ac as modeling_rlt_ac
 
     sys.modules["lerobot.policies.rlt.modeling_rlt_ac"] = modeling_rlt_ac
-    if full_pedal_outcome_window_s is not None:
-        _patch_full_pedal_outcome_listener(full_pedal_outcome_window_s)
-    if episode_end_pedal_key is not None:
-        _patch_episode_end_pedal_listener(episode_end_pedal_key)
+    if intervention_toggle_key is not None:
+        _patch_record_intervention_toggle_key(intervention_toggle_key)
+    if skip_policyless_reset_loop:
+        _patch_skip_policyless_reset_loop()
+    if background_episode_video_encoding:
+        _patch_append_safe_episode_metadata_flush()
+        _patch_background_episode_video_encoding()
 
 
 class _CompositeListener:
@@ -54,68 +70,126 @@ class _CompositeListener:
                 stop()
 
 
-class _EpisodeEndPedalListener:
+def _event_key_name(key: str | None) -> str | None:
+    if key is None:
+        return None
+    normalized = key.lower()
+    return "space" if normalized == " " else normalized
+
+
+def _keyboard_key_arg(key: str) -> str:
+    normalized = _event_key_name(key)
+    if normalized is None:
+        raise ValueError("key must not be None")
+    return " " if normalized == "space" else normalized
+
+
+def _pynput_key_name(key: Any, keyboard_module: Any) -> str | None:
+    if key == keyboard_module.Key.space:
+        return "space"
+    if key == keyboard_module.Key.enter:
+        return "enter"
+    if hasattr(key, "char") and key.char:
+        return key.char.lower()
+    return None
+
+
+class _DoubleTapEpisodeOutcomeRouter:
     def __init__(
-        self, listener_cls, events: dict, pedal_key: str, on_press, *args, **kwargs
-    ):
+        self,
+        events: dict[str, Any],
+        outcome_key: str,
+        double_tap_window_s: float,
+    ) -> None:
         self._events = events
-        self._pedal_key = pedal_key
-        self._on_press = on_press
-        self._listener = listener_cls(self._handle_press, *args, **kwargs)
+        self._outcome_key = _event_key_name(outcome_key)
+        self._double_tap_window_s = double_tap_window_s
+        self._timer: threading.Timer | None = None
+        self._lock = threading.Lock()
 
-    def _handle_press(self, key_name: str) -> None:
-        if key_name == self._pedal_key:
-            self._events["exit_early"] = True
-            logging.info("Pedal '%s' pressed -> exit current episode", key_name)
+    def on_press(self, key_name: str) -> None:
+        if _event_key_name(key_name) != self._outcome_key:
             return
-        self._on_press(key_name)
+        with self._lock:
+            if self._timer is None:
+                timer = threading.Timer(self._double_tap_window_s, self._mark_success)
+                timer.daemon = True
+                self._timer = timer
+                timer.start()
+                logging.info(
+                    "Episode outcome pending; tap '%s' again within %.1fs for failure",
+                    self._outcome_key,
+                    self._double_tap_window_s,
+                )
+                return
+            self._timer.cancel()
+            self._timer = None
+            self._events["episode_outcome"] = "failure"
+            self._events["exit_early"] = True
+        logging.info("Episode outcome resolved as failure")
 
-    def start(self) -> bool:
-        return self._listener.start()
+    def _mark_success(self) -> None:
+        with self._lock:
+            if self._timer is None:
+                return
+            self._timer = None
+            self._events["episode_outcome"] = "success"
+            self._events["exit_early"] = True
+        logging.info("Episode outcome resolved as success")
 
     def stop(self) -> None:
-        self._listener.stop()
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
 
 
-def _patch_episode_end_pedal_listener(pedal_key: str) -> None:
+def _start_double_tap_pedal_listener(router: _DoubleTapEpisodeOutcomeRouter):
+    try:
+        from lerobot.utils.pedal_listener import PedalListener
+    except ImportError as error:
+        logging.info("Episode outcome pedal listener unavailable: %s", error)
+        return None
+
+    listener = PedalListener(on_press=router.on_press)
+    if listener.start():
+        return listener
+    return None
+
+
+def _start_double_tap_keyboard_listener(
+    outcome_key: str,
+    router: _DoubleTapEpisodeOutcomeRouter,
+):
     import lerobot.utils.control_utils as control_utils
-    import lerobot.utils.pedal_listener as pedal_listener
 
-    if getattr(control_utils._start_pedal_listener, "_evo_rlt_episode_end_pedal", False):
-        return
+    if control_utils.is_headless():
+        return None
+    try:
+        from pynput import keyboard
+    except ImportError as error:
+        logging.info("Episode outcome keyboard listener unavailable: %s", error)
+        return None
 
-    original_start_pedal_listener = control_utils._start_pedal_listener
+    normalized_outcome_key = _event_key_name(outcome_key)
 
-    def _start_pedal_listener(events, *args, **kwargs):
-        original_pedal_listener = pedal_listener.PedalListener
+    def on_press(key: Any) -> None:
+        key_name = _pynput_key_name(key, keyboard)
+        if key_name == normalized_outcome_key:
+            router.on_press(key_name)
 
-        def listener_factory(on_press, *listener_args, **listener_kwargs):
-            return _EpisodeEndPedalListener(
-                original_pedal_listener,
-                events,
-                pedal_key,
-                on_press,
-                *listener_args,
-                **listener_kwargs,
-            )
-
-        pedal_listener.PedalListener = listener_factory
-        try:
-            return original_start_pedal_listener(events, *args, **kwargs)
-        finally:
-            pedal_listener.PedalListener = original_pedal_listener
-
-    _start_pedal_listener._evo_rlt_episode_end_pedal = True
-    control_utils._start_pedal_listener = _start_pedal_listener
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+    return listener
 
 
-def _patch_full_pedal_outcome_listener(double_tap_window_s: float) -> None:
-    import threading
-
+def _patch_double_tap_episode_outcome_listener(
+    double_tap_window_s: float,
+    outcome_key: str,
+) -> None:
     import lerobot.utils.control_utils as control_utils
-    from lerobot.utils.recording_annotations import EPISODE_FAILURE, EPISODE_SUCCESS
 
-    if getattr(control_utils.init_keyboard_listener, "_evo_rlt_full_pedal_outcome", False):
+    if getattr(control_utils.init_keyboard_listener, "_evo_rlt_double_tap_episode_outcome", False):
         return
 
     original_init_keyboard_listener = control_utils.init_keyboard_listener
@@ -124,57 +198,239 @@ def _patch_full_pedal_outcome_listener(double_tap_window_s: float) -> None:
         kwargs["episode_success_key"] = None
         kwargs["episode_failure_key"] = None
         keyboard_listener, events = original_init_keyboard_listener(*args, **kwargs)
+        router = _DoubleTapEpisodeOutcomeRouter(events, outcome_key, double_tap_window_s)
+        pedal_listener = _start_double_tap_pedal_listener(router)
+        extra_keyboard_listener = _start_double_tap_keyboard_listener(outcome_key, router)
+        return _CompositeListener(keyboard_listener, pedal_listener, extra_keyboard_listener, router), events
 
-        try:
-            from lerobot.utils.pedal_listener import PedalListener
-        except ImportError as error:
-            logging.info("Full-episode pedal outcome unavailable: %s", error)
-            return keyboard_listener, events
-
-        state = {"timer": None}
-        lock = threading.Lock()
-
-        def mark_success() -> None:
-            with lock:
-                if state["timer"] is None:
-                    return
-                state["timer"] = None
-                events["episode_outcome"] = EPISODE_SUCCESS
-                events["exit_early"] = True
-            logging.info("Full-episode pedal outcome resolved as success")
-
-        def on_pedal(key_name: str) -> None:
-            if key_name != "r":
-                return
-            with lock:
-                timer = state["timer"]
-                if timer is None:
-                    timer = threading.Timer(double_tap_window_s, mark_success)
-                    timer.daemon = True
-                    state["timer"] = timer
-                    timer.start()
-                    logging.info(
-                        "Full-episode pedal end pending; tap again within %.1fs for failure",
-                        double_tap_window_s,
-                    )
-                    return
-                timer.cancel()
-                state["timer"] = None
-                events["episode_outcome"] = EPISODE_FAILURE
-                events["exit_early"] = True
-            logging.info("Full-episode pedal outcome resolved as failure")
-
-        pedal_listener = PedalListener(on_press=on_pedal)
-        if not pedal_listener.start():
-            return keyboard_listener, events
-        return _CompositeListener(keyboard_listener, pedal_listener), events
-
-    init_keyboard_listener._evo_rlt_full_pedal_outcome = True
+    init_keyboard_listener._evo_rlt_double_tap_episode_outcome = True
     control_utils.init_keyboard_listener = init_keyboard_listener
+
+
+def _patch_record_intervention_toggle_key(toggle_key: str) -> None:
+    from lerobot.scripts import lerobot_rlt_record
+
+    if getattr(lerobot_rlt_record.init_keyboard_listener, "_evo_rlt_intervention_key", None):
+        return
+
+    original_init_keyboard_listener = lerobot_rlt_record.init_keyboard_listener
+    keyboard_toggle_key = _keyboard_key_arg(toggle_key)
+
+    def init_keyboard_listener(*args, **kwargs):
+        kwargs["intervention_toggle_key"] = keyboard_toggle_key
+        return original_init_keyboard_listener(*args, **kwargs)
+
+    init_keyboard_listener._evo_rlt_intervention_key = _event_key_name(toggle_key)
+    lerobot_rlt_record.init_keyboard_listener = init_keyboard_listener
+
+
+def _patch_skip_policyless_reset_loop() -> None:
+    from lerobot.scripts import lerobot_rlt_record
+
+    if getattr(lerobot_rlt_record.record_loop, "_evo_rlt_skip_policyless_reset_loop", False):
+        return
+
+    original_record_loop = lerobot_rlt_record.record_loop
+
+    def record_loop(*args, **kwargs):
+        if kwargs.get("policy") is None and kwargs.get("dataset") is None:
+            logging.info("Skipping policyless between-episode reset loop.")
+            return None
+        return original_record_loop(*args, **kwargs)
+
+    record_loop._evo_rlt_skip_policyless_reset_loop = True
+    lerobot_rlt_record.record_loop = record_loop
+
+
+def _metadata_buffer_to_pydict(metadata_buffer: list[dict], numpy_module: Any) -> dict:
+    combined_dict = {}
+    for episode_dict in metadata_buffer:
+        for key, value in episode_dict.items():
+            if key not in combined_dict:
+                combined_dict[key] = []
+            val = value[0] if isinstance(value, list) else value
+            combined_dict[key].append(val.tolist() if isinstance(val, numpy_module.ndarray) else val)
+    return combined_dict
+
+
+def _patch_append_safe_episode_metadata_flush() -> None:
+    import lerobot.datasets.lerobot_dataset as lerobot_dataset
+
+    metadata_cls = lerobot_dataset.LeRobotDatasetMetadata
+    if getattr(metadata_cls._flush_metadata_buffer, "_evo_rlt_append_safe", False):
+        return
+
+    original_flush_metadata_buffer = metadata_cls._flush_metadata_buffer
+
+    def _flush_metadata_buffer(self) -> None:
+        if not hasattr(self, "metadata_buffer") or len(self.metadata_buffer) == 0:
+            return
+        if self.writer is not None:
+            return original_flush_metadata_buffer(self)
+
+        first_ep = self.metadata_buffer[0]
+        chunk_idx = first_ep["meta/episodes/chunk_index"][0]
+        file_idx = first_ep["meta/episodes/file_index"][0]
+        path = self.root / lerobot_dataset.DEFAULT_EPISODES_PATH.format(
+            chunk_index=chunk_idx,
+            file_index=file_idx,
+        )
+        if not Path(path).exists():
+            return original_flush_metadata_buffer(self)
+
+        incoming_dict = _metadata_buffer_to_pydict(self.metadata_buffer, lerobot_dataset.np)
+        incoming_table = lerobot_dataset.pa.Table.from_pydict(incoming_dict)
+        existing_df = lerobot_dataset.pd.read_parquet(path)
+        incoming_df = incoming_table.to_pandas()
+        combined_df = lerobot_dataset.pd.concat([existing_df, incoming_df], ignore_index=True)
+        combined_df.to_parquet(path)
+        self.latest_episode = self.metadata_buffer[-1]
+        self.metadata_buffer.clear()
+
+    _flush_metadata_buffer._evo_rlt_append_safe = True
+    metadata_cls._flush_metadata_buffer = _flush_metadata_buffer
+
+
+class _BackgroundEpisodeVideoEncoder:
+    def __init__(self, dataset, encode_batch):
+        self.dataset = dataset
+        self.encode_batch = encode_batch
+        self.lock = threading.Lock()
+        self.executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="evo-rlt-video",
+        )
+        self.futures: list[concurrent.futures.Future] = []
+
+    def submit(self, start_episode: int, end_episode: int) -> None:
+        future = self.executor.submit(self._encode, start_episode, end_episode)
+        self.futures.append(future)
+
+    def _encode(self, start_episode: int, end_episode: int) -> None:
+        with self.lock:
+            logging.info(
+                "Background encoding episode videos from %s to %s",
+                start_episode,
+                end_episode - 1,
+            )
+            self.encode_batch(self.dataset, start_episode, end_episode)
+            self.dataset.episodes_since_last_encoding = 0
+
+    def wait(self) -> None:
+        for future in self.futures:
+            future.result()
+        self.futures.clear()
+        self.executor.shutdown(wait=True)
+
+
+def _patch_background_episode_video_encoding() -> None:
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+    from lerobot.datasets.video_utils import VideoEncodingManager
+
+    if getattr(LeRobotDataset.save_episode, "_evo_rlt_background_video_encoding", False):
+        return
+
+    original_save_episode = LeRobotDataset.save_episode
+    original_batch_save_episode_video = LeRobotDataset._batch_save_episode_video
+    original_video_encoding_manager_exit = VideoEncodingManager.__exit__
+
+    def get_encoder(dataset) -> _BackgroundEpisodeVideoEncoder:
+        encoder = getattr(dataset, "_evo_rlt_background_video_encoder", None)
+        if encoder is None:
+            encoder = _BackgroundEpisodeVideoEncoder(dataset, original_batch_save_episode_video)
+            dataset._evo_rlt_background_video_encoder = encoder
+        return encoder
+
+    def save_episode(self, *args, **kwargs):
+        if len(getattr(self.meta, "video_keys", [])) == 0:
+            return original_save_episode(self, *args, **kwargs)
+
+        encoder = get_encoder(self)
+        with encoder.lock:
+            before_episode_count = self.meta.total_episodes
+            original_batch_encoding_size = self.batch_encoding_size
+            self.batch_encoding_size = max(original_batch_encoding_size, self.meta.total_episodes + 1_000_000)
+            try:
+                result = original_save_episode(self, *args, **kwargs)
+            finally:
+                self.batch_encoding_size = original_batch_encoding_size
+
+            after_episode_count = self.meta.total_episodes
+            if after_episode_count > before_episode_count:
+                self.meta._close_writer()
+                self.episodes_since_last_encoding = 0
+                encoder.submit(after_episode_count - 1, after_episode_count)
+            return result
+
+    def video_encoding_manager_exit(self, exc_type, exc_val, exc_tb):
+        encoder = getattr(self.dataset, "_evo_rlt_background_video_encoder", None)
+        if encoder is not None:
+            logging.info("Waiting for background episode video encoding to finish...")
+            try:
+                encoder.wait()
+            finally:
+                self.dataset.episodes_since_last_encoding = 0
+        return original_video_encoding_manager_exit(self, exc_type, exc_val, exc_tb)
+
+    save_episode._evo_rlt_background_video_encoding = True
+    LeRobotDataset.save_episode = save_episode
+    VideoEncodingManager.__exit__ = video_encoding_manager_exit
+
+
+def _validate_distinct_keys(**keys: str | None) -> None:
+    seen: dict[str, str] = {}
+    for label, key in keys.items():
+        normalized = _event_key_name(key)
+        if normalized is None:
+            continue
+        if normalized in seen:
+            raise ValueError(f"{label} conflicts with {seen[normalized]} on key {normalized!r}")
+        seen[normalized] = label
+
+
+def _collect_external_episode_outcome_key(args: argparse.Namespace) -> str | None:
+    if args.only_critical:
+        return None
+    return args.episode_outcome_key
+
+
+def _episode_outcome_argv(enabled: bool) -> list[str]:
+    if not enabled:
+        return []
+    return [
+        "--enable_episode_outcome_labeling=true",
+        "--require_episode_success_label=true",
+    ]
+
+
+def _collect_rlt_phase_argv(args: argparse.Namespace) -> list[str]:
+    common = [
+        "--rlt.enable=true",
+        f"--rlt.rl_phase_key={_keyboard_key_arg(args.rlt_toggle_key)}",
+        f"--rlt.rl_phase_double_tap_window_s={args.double_tap_window_s}",
+    ]
+    if args.only_critical:
+        return [
+            *common,
+            "--rlt.skip_prefix_recording=true",
+            "--rlt.rl_phase_key_toggles_episode=true",
+            f"--rlt.start_in_teleop={'true' if args.start_with_teleop else 'false'}",
+        ]
+    return [
+        *common,
+        f"--rlt.start_in_teleop={'true' if args.start_with_teleop else 'false'}",
+        "--rlt.rl_phase_key_toggles_critical_phase=true",
+    ]
 
 
 def run_collect(args: argparse.Namespace) -> None:
     set_offline_env()
+    episode_outcome_key = _collect_external_episode_outcome_key(args)
+    _validate_distinct_keys(
+        rlt_toggle_key=args.rlt_toggle_key,
+        teleop_toggle_key=args.teleop_toggle_key,
+        episode_outcome_key=episode_outcome_key,
+    )
     setup = load_robot_setup(args.setup_json)
     paths = resolve_run_paths(setup.setup, args.dataset_tag, "eval_vla_rlt_vla")
     configure_logging(paths.log_file, args.log_level)
@@ -197,7 +453,15 @@ def run_collect(args: argparse.Namespace) -> None:
             print(" ".join(sys.argv))
             return
 
-        prepare_lerobot_runtime(episode_end_pedal_key="space")
+        prepare_lerobot_runtime(
+            double_tap_episode_outcome_key=episode_outcome_key,
+            double_tap_episode_outcome_window_s=(
+                args.double_tap_window_s if episode_outcome_key is not None else None
+            ),
+            intervention_toggle_key=args.teleop_toggle_key,
+            skip_policyless_reset_loop=args.only_critical and not args.start_with_teleop,
+            background_episode_video_encoding=True,
+        )
         from lerobot.scripts.lerobot_rlt_record import record
 
         record()
@@ -232,9 +496,7 @@ def build_default_collect_record_argv(
             fps=args.fps,
             vcodec=args.vcodec,
         ),
-        "--rlt.enable=true",
-        "--rlt.rl_phase_key_toggles_critical_phase=true",
-        f"--rlt.rl_phase_double_tap_window_s={args.double_tap_window_s}",
+        *_collect_rlt_phase_argv(args),
         *build_rtc_argv(
             enabled=args.rtc,
             execution_horizon=args.rtc_execution_horizon,
@@ -242,6 +504,9 @@ def build_default_collect_record_argv(
             prefix_attention_schedule=args.rtc_prefix_attention_schedule,
             vla_execution_horizon=args.vla_rtc_execution_horizon,
             action_queue_size_to_get_new_actions=args.rtc_action_queue_size_to_get_new_actions,
+        ),
+        *_episode_outcome_argv(
+            args.only_critical or _collect_external_episode_outcome_key(args) is not None
         ),
         "--intervention_state_machine_enabled=true",
         f"--policy_sync_to_teleop={'true' if teleop_argv else 'false'}",
@@ -266,11 +531,31 @@ def print_collect_summary(args: argparse.Namespace, paths) -> None:
         f"schedule={args.rtc_prefix_attention_schedule} "
         f"refill_threshold={args.rtc_action_queue_size_to_get_new_actions}"
     )
+    if args.only_critical:
+        print(
+            f"Recording mode: RLT-only. {args.rlt_toggle_key} starts RLT and recording; "
+            f"{args.rlt_toggle_key} ends the episode as success; "
+            f"{args.rlt_toggle_key}+{args.rlt_toggle_key} inside "
+            f"{args.double_tap_window_s:.1f}s marks failure."
+        )
+    else:
+        print(
+            f"Recording mode: full trajectory. Recording starts immediately; "
+            f"{args.rlt_toggle_key} toggles RLT critical phase while the episode continues."
+        )
+    print(f"Episode starts with: {'teleop' if args.start_with_teleop else 'VLA'}")
     print(
-        "Critical phase mode: r starts RLT; r ends the critical phase as success; "
-        "r+r inside "
-        f"{args.double_tap_window_s:.1f}s marks failure. The episode then continues in VLA mode."
+        "Controls: "
+        f"{args.rlt_toggle_key}=toggle RLT, "
+        f"{args.teleop_toggle_key}=toggle teleop intervention"
     )
+    episode_outcome_key = _collect_external_episode_outcome_key(args)
+    if episode_outcome_key is not None:
+        print(
+            "Episode outcome: "
+            f"{episode_outcome_key}=success after {args.double_tap_window_s:.1f}s; "
+            f"double-tap {episode_outcome_key}=failure"
+        )
 
 
 def run_segment(args: argparse.Namespace) -> None:
@@ -308,7 +593,7 @@ def run_segment(args: argparse.Namespace) -> None:
             print(" ".join(sys.argv))
             return
 
-        prepare_lerobot_runtime()
+        prepare_lerobot_runtime(background_episode_video_encoding=True)
         from lerobot.scripts.lerobot_rlt_record import record
 
         record()
@@ -460,7 +745,13 @@ def run_full(args: argparse.Namespace) -> None:
             print(" ".join(sys.argv))
             return
         prepare_lerobot_runtime(
-            full_pedal_outcome_window_s=args.double_tap_window_s if args.pedal_outcome else None
+            double_tap_episode_outcome_key=(
+                args.episode_outcome_key if args.pedal_outcome else None
+            ),
+            double_tap_episode_outcome_window_s=(
+                args.double_tap_window_s if args.pedal_outcome else None
+            ),
+            background_episode_video_encoding=True,
         )
         from lerobot.scripts.lerobot_rlt_record import record
 

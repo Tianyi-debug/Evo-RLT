@@ -18,15 +18,8 @@
 <p align="center"><strong>Real-Robot Rollout Video</strong></p>
 
 <p align="center">
-  <a href="./website/assets/videos/rlt_rollout.mp4">
-    <img alt="RLT rollout video placeholder" src="https://placehold.co/1280x720/111827/e5e7eb?text=RLT+Rollout+Video+Placeholder" width="96%"/>
-  </a>
+  <video src="./website/assets/videos/rlt_rollout.mp4" width="96%" autoplay loop muted playsinline controls></video>
 </p>
-
-<!--
-Replace the placeholder above with the final video asset once it is ready.
-Recommended path: website/assets/videos/rlt_rollout.mp4
--->
 
 ## Overview
 
@@ -183,34 +176,207 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
 
 ## Real-Robot Recording and Deployment
 
-`evo-rlt-record` wraps the LeRobot recording stack and injects RLT-specific policy, RTC, and human-label behavior without modifying LeRobot source files.
+`evo-rlt-record` wraps the LeRobot recording stack and injects RLT-specific policy, RTC, episode labels, teleop intervention, and background video encoding without modifying LeRobot source files. All robot ports, camera paths, calibration directories, dataset roots, and model checkpoints are supplied by the caller.
 
-Example VLA-only full-process recording with pedal outcome labels:
+### Robot setup manifest
+
+Pass `--setup-json` to every real-robot command, or place the same manifest at `~/.roboclaw/workspace/embodied/manifest.json`. The manifest is the only place that needs machine-specific robot paths.
+
+```json
+{
+  "datasets": {"root": "/path/to/lerobot_datasets"},
+  "arms": [
+    {
+      "alias": "left_follower",
+      "type": "follower",
+      "port": "/dev/serial/by-id/<left-follower>",
+      "calibration_dir": "/path/to/calibration/<left-follower-serial>"
+    },
+    {
+      "alias": "right_follower",
+      "type": "follower",
+      "port": "/dev/serial/by-id/<right-follower>",
+      "calibration_dir": "/path/to/calibration/<right-follower-serial>"
+    },
+    {
+      "alias": "left_leader",
+      "type": "leader",
+      "port": "/dev/serial/by-id/<left-leader>",
+      "calibration_dir": "/path/to/calibration/<left-leader-serial>"
+    },
+    {
+      "alias": "right_leader",
+      "type": "leader",
+      "port": "/dev/serial/by-id/<right-leader>",
+      "calibration_dir": "/path/to/calibration/<right-leader-serial>"
+    }
+  ],
+  "cameras": [
+    {
+      "alias": "left_wrist",
+      "port": "/dev/v4l/by-path/<left-wrist>",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    },
+    {
+      "alias": "right_wrist",
+      "port": "/dev/v4l/by-path/<right-wrist>",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    },
+    {
+      "alias": "right_front",
+      "port": "/dev/v4l/by-path/<right-front>",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    }
+  ]
+}
+```
+
+Follower and leader calibration files are copied into temporary LeRobot-compatible names at runtime. Dataset paths are created under `<datasets.root>/<MMDD>_<dataset-tag>/<prefix>_<HHMMSS>`.
+
+Set up the environment before running robot commands:
 
 ```bash
-PYTHONPATH=src:/path/to/evo-rl/src HF_HUB_OFFLINE=1 evo-rlt-record full \
+cd /path/to/evo-rlt
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate evo-rl
+export PYTHONPATH=/path/to/evo-rlt/src:/path/to/evo-rl/src
+export HF_HUB_OFFLINE=1
+```
+
+### VLA-RLT-VLA full-process collection
+
+This mode records the whole episode from start to success/failure. Each episode starts in VLA by default, `r` toggles the RLT critical phase, and `space` temporarily enters teleop.
+
+```bash
+evo-rlt-record collect \
+  --setup-json /path/to/robot_manifest.json \
+  --policy-path /path/to/rlt_ac_policy \
+  --vla-path /path/to/base_or_finetuned_vla.pt \
+  --rl-token-path /path/to/rl_token_policy \
+  --dataset-tag vla_rlt_vla_full \
+  --num-episodes 5 \
+  --episode-time-s 3000 \
+  --fps 30 \
+  --vcodec h264 \
+  --rlt-toggle-key r \
+  --teleop-toggle-key space \
+  --episode-outcome-key e \
+  --no-start-with-teleop \
+  --no-only-critical
+```
+
+Controls:
+
+```text
+r              enter or exit RLT critical phase
+space          enter teleop intervention; press again to return to the previous VLA/RLT state
+e              save success after the double-tap window
+e+e            save failure
+left arrow     rerecord the current episode
+Esc            stop data collection
+```
+
+Default RTC settings match the validated real-robot deployment script: RLT horizon `10`, VLA horizon `25`, action-queue refill threshold `30`, max guidance weight `10.0`, and prefix attention schedule `EXP`.
+
+### RLT-only critical-segment collection
+
+Use `--only-critical` when the dataset should contain only the RLT segment. Recording waits until the first `r`, continues across temporary teleop interventions, and ends when RLT is exited. A single `r` exit saves success; `r+r` inside `--double-tap-window-s` saves failure.
+
+```bash
+evo-rlt-record collect \
+  --setup-json /path/to/robot_manifest.json \
+  --policy-path /path/to/rlt_ac_policy \
+  --vla-path /path/to/base_or_finetuned_vla.pt \
+  --rl-token-path /path/to/rl_token_policy \
+  --dataset-tag vla_rlt_vla_only_critical \
+  --num-episodes 5 \
+  --episode-time-s 3000 \
+  --fps 30 \
+  --vcodec h264 \
+  --rlt-toggle-key r \
+  --teleop-toggle-key space \
+  --only-critical \
+  --no-start-with-teleop
+```
+
+In `--only-critical --no-start-with-teleop`, the wrapper skips LeRobot's policy-less between-episode teleop reset loop so the next episode returns to VLA and waits for the next RLT start.
+
+### Starting episodes in teleop
+
+Add `--start-with-teleop` when each episode should begin under teleop control. Pressing the teleop key exits teleop and returns to the state that was active before the intervention. This flag works with both full-process and RLT-only collection.
+
+```bash
+evo-rlt-record collect \
+  --setup-json /path/to/robot_manifest.json \
+  --policy-path /path/to/rlt_ac_policy \
+  --dataset-tag teleop_start_only_critical \
+  --only-critical \
+  --start-with-teleop
+```
+
+### Other record modes
+
+`segment` records a key segment and labels success/failure on that segment:
+
+```bash
+evo-rlt-record segment \
+  --setup-json /path/to/robot_manifest.json \
+  --initial-source teleop \
+  --critical-source rlt \
+  --policy-path /path/to/rlt_ac_policy \
+  --vla-path /path/to/base_or_finetuned_vla.pt \
+  --rl-token-path /path/to/rl_token_policy \
+  --dataset-tag rlt_segment \
+  --num-episodes 5 \
+  --episode-time-s 3000 \
+  --fps 30 \
+  --vcodec h264
+```
+
+`full` records a complete trajectory with a fixed initial source. This is useful for VLA-only or teleop-only baselines:
+
+```bash
+evo-rlt-record full \
+  --setup-json /path/to/robot_manifest.json \
   --initial-source vla \
-  --policy-path <AC_OR_VLA_POLICY_PATH> \
-  --vla-path <BASE_OR_FINETUNED_VLA_PT> \
+  --policy-path /path/to/vla_or_rlt_policy \
+  --vla-path /path/to/base_or_finetuned_vla.pt \
   --phase-mode always_vla \
   --chunk-exec-steps 25 \
   --pedal-outcome \
+  --episode-outcome-key e \
   --double-tap-window-s 0.6 \
+  --dataset-tag vla_full \
   --num-episodes 5 \
   --episode-time-s 3000 \
   --reset-time-s 0 \
   --fps 30 \
-  --vcodec h264 \
-  --dataset-tag vla_full_pedal \
-  --no-teleop
+  --vcodec h264
 ```
 
-Pedal semantics in this mode:
+`live` runs a policy on the robot without saving a dataset:
 
-```text
-single tap    success, end current episode, start next episode
-double tap    failure, end current episode, start next episode
+```bash
+evo-rlt-record live \
+  --setup-json /path/to/robot_manifest.json \
+  --policy-path /path/to/policy \
+  --eval-script /path/to/eval_with_real_robot.py \
+  --phase-mode always_vla \
+  --chunk-exec-steps 25 \
+  --duration 120 \
+  --fps 30
 ```
+
+`evo-rlt-collect-default` is an alias for `evo-rlt-record collect`. During recording, each saved episode is submitted to a single-worker background video encoder so image-to-video conversion does not block the next episode; normal shutdown waits for any queued encoding to finish.
 
 ## Repository Layout
 
@@ -239,41 +405,3 @@ Citation information will be added with the paper release.
 ## License
 
 This project follows the Evo-RL release convention and is distributed under the Apache-2.0 license.
-
-## Default real-robot data collection
-
-On the lab bimanual setup, the default VLA-RLT-VLA collection command is:
-
-```bash
-cd /home/kye/evo-rlt
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate evo-rl
-
-PYTHONPATH=src HF_HUB_OFFLINE=1 python -m evo_rlt.adapters.lerobot.record collect
-```
-
-It reads the robot manifest from `~/.roboclaw/workspace/embodied/manifest.json`, stages follower
-and leader calibrations into temporary LeRobot-compatible names, and writes datasets under:
-
-```text
-~/.roboclaw/workspace/embodied/datasets/<MMDD>_vla_rlt_vla_test/eval_vla_rlt_vla_<HHMMSS>
-```
-
-The default command preserves the validated RTC chunk settings from the best real-robot script:
-
-```text
-RLT RTC execution horizon: 10
-VLA RTC execution horizon: 25
-RTC action queue refill threshold: 30
-```
-
-Default collection controls:
-
-```text
-r pedal       toggle RLT critical phase
-space pedal   end the current episode, same as the keyboard right arrow
-left arrow    rerecord the current episode
-Esc           stop data collection
-```
-
-The same defaults are exposed as `evo-rlt-collect-default` after reinstalling package entry points.

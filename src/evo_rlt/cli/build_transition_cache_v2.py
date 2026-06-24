@@ -47,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="cuda")
     p.add_argument("--max-episodes", type=int, default=None,
                    help="Cap on episodes to process (debug).")
+    p.add_argument("--video-backend", default="pyav",
+                   help="Video decoder backend passed to LeRobotDataset.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--empty-cache-every", type=int, default=4,
                    help="Call torch.cuda.empty_cache() every N batches.")
@@ -179,6 +181,7 @@ def main() -> None:
         repo_id=args.demo_dataset_repo_id,
         root=args.demo_dataset_root,
         delta_timestamps=delta,
+        video_backend=args.video_backend,
     )
     n_episodes = dataset.num_episodes
     if args.max_episodes is not None:

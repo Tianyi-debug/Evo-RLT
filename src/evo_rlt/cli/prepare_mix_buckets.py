@@ -23,11 +23,11 @@ Workflow:
 
 Example:
   prepare_mix_buckets.py \\
-    --bucket cp405=/data/cache_cp405:Shiki42/sft_pi05_screw_405ep \\
-    --bucket teleop141=/data/cache_teleop141:Shiki42/0415_teleop_141 \\
-    --bucket intervene156=/data/cache_intervene156:Shiki42/0420_intervene_156 \\
-    --reference cp405 \\
-    --output-dir /data/cache_mix_ready \\
+    --bucket demo_a=/path/to/cache_a:your-org/demo_a \\
+    --bucket demo_b=/path/to/cache_b:your-org/demo_b \\
+    --bucket demo_c=/path/to/cache_c:your-org/demo_c \\
+    --reference demo_a \\
+    --output-dir /path/to/cache_mix_ready \\
     --proprio-dim 12 --threshold 1.5
 """
 from __future__ import annotations
