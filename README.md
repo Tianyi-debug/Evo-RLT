@@ -1,9 +1,7 @@
 <h1 align="center">Evo-RLT</h1>
 
 <p align="center">
-  <a href="https://github.com/MINT-SJTU/Evo-RL"><img alt="parent project" src="https://img.shields.io/badge/Parent-Evo--RL-0ea5e9"/></a>
   <a href="https://github.com/huggingface/lerobot"><img alt="lerobot version" src="https://img.shields.io/badge/LeRobot-0.4.4-f59e0b"/></a>
-  <a href="#relationship-to-evo-rl"><img alt="rlt branch" src="https://img.shields.io/badge/Evo--RL-rlt%20branch-6366f1"/></a>
   <a href="#citation"><img alt="paper coming soon" src="https://img.shields.io/static/v1?label=Paper&message=Coming%20Soon&color=9ca3af"/></a>
   <a href="#model--dataset"><img alt="model and dataset coming soon" src="https://img.shields.io/static/v1?label=Model%20%2F%20Dataset&message=Coming%20Soon&color=9ca3af"/></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/License-Apache--2.0-ef4444"/></a>
@@ -12,18 +10,22 @@
 <p align="center"><strong>SJTU-MINT</strong></p>
 
 <p align="center">
-  <strong>RLT is the RL-token branch of Evo-RL: a LeRobot-based wrapper for VLA finetuning, RL-token learning, transition-cache generation, actor-critic training, and real-robot deployment.</strong>
+  <strong>An independent LeRobot-based reproduction of RLT for the pi paper, covering RL-token learning, transition-cache generation, actor-critic training, and real-robot rollout.</strong>
 </p>
 
-<p align="center"><strong>Real-Robot Rollout Video</strong></p>
+<p align="center"><strong>Real-Robot Rollout Demo</strong></p>
 
 <p align="center">
-  <video src="./website/assets/videos/rlt_rollout.mp4" width="96%" autoplay loop muted playsinline controls></video>
+  <a href="./website/assets/videos/rlt_rollout.mp4">
+    <img alt="RLT real-robot rollout video preview" src="./website/assets/images/rlt_rollout_preview.jpg" width="96%"/>
+  </a>
 </p>
+
+<p align="center"><a href="./website/assets/videos/rlt_rollout.mp4">Open rlt_rollout.mp4</a></p>
 
 ## Overview
 
-Evo-RLT packages the RLT work that was originally developed inside the Evo-RL codebase into a standalone repository. It keeps LeRobot as a strong dependency, while isolating all LeRobot-specific integration under `evo_rlt.adapters.lerobot`. The algorithmic core under `evo_rlt.core` stays torch-only, so future LeRobot updates can be absorbed at the adapter layer instead of being mixed into the algorithm implementation.
+Evo-RLT is a standalone reproduction repository for RLT. It keeps the algorithmic code under `evo_rlt.core` torch-only, and places LeRobot-specific integration under `evo_rlt.adapters.lerobot` so policy registration, dataset handling, recording, and deployment stay isolated from the algorithm implementation.
 
 The project currently supports:
 
@@ -33,24 +35,10 @@ The project currently supports:
 - Chunk actor-critic training for RLT policies.
 - Real-robot recording and deployment wrappers for VLA, RLT, and human-in-the-loop collection.
 
-## Relationship to Evo-RL
-
-This repository is an SJTU-MINT project and exists as the standalone RLT sub-repository of Evo-RL. Conceptually, it corresponds to the `rlt` branch of Evo-RL: the original monorepo implementation was extracted, cleaned, and reorganized so that RLT can evolve independently while still depending on LeRobot and remaining compatible with Evo-RL's real-world robot workflow.
-
-The intended layering is:
-
-```text
-Evo-RL real-world workflow
-`-- Evo-RLT package
-    |-- evo_rlt.core                  # torch-only RLT algorithm modules
-    |-- evo_rlt.adapters.lerobot      # LeRobot policy, dataset, processor, and record adapters
-    `-- evo_rlt.cli                   # training, cache, and deployment command-line tools
-```
-
 ## Highlights
 
-- **LeRobot wrapper, not a forked code dump:** RLT-specific code lives in `evo_rlt`, and LeRobot integration is registered at runtime.
-- **Deploy-aligned training artifacts:** RL-token and actor-critic policies are saved in policy-style directories that can be consumed by deployment scripts.
+- **Standalone RLT package:** RLT-specific code lives in `evo_rlt`, while LeRobot integration is registered at runtime.
+- **Deploy-aligned artifacts:** RL-token and actor-critic policies are saved in policy-style directories that deployment scripts can consume directly.
 - **Cache-first offline RL:** expensive VLA/RL-token encoding can be precomputed into transition caches before actor-critic training.
 - **Robot-facing scripts:** the record wrapper supports VLA-only collection, pedal outcome labels, RLT deployment, RTC defaults, and human-in-the-loop workflows.
 
@@ -60,16 +48,16 @@ Evo-RL real-world workflow
 git clone https://github.com/Shiki42/evo-rlt.git
 cd evo-rlt
 
-conda create -y -n evo-rl python=3.10
-conda activate evo-rl
+conda create -y -n evo-rlt python=3.10
+conda activate evo-rlt
 
-pip install -e .
+pip install -e ".[lerobot]"
 ```
 
-For the current migration target, use the Evo-RL LeRobot 0.4.4 fork at commit `95360c66eff2c8adaf8bc51c892f4f0b6ed5ff86` on `PYTHONPATH` or install it in the same environment.
+If you are using a local LeRobot checkout instead of the package dependency, put this repository and that checkout on `PYTHONPATH`:
 
 ```bash
-export PYTHONPATH=/path/to/evo-rlt/src:/path/to/evo-rl/src
+export PYTHONPATH=/path/to/evo-rlt/src:/path/to/lerobot/src
 ```
 
 ## Runtime Registration
@@ -88,6 +76,78 @@ Registered policy types:
 rlt_token    # RL-token reconstruction policy
 rlt_ac       # chunk actor-critic policy
 rlt          # deployment policy wrapper
+```
+
+## Hardware Setup
+
+Use the [Evo-RL hardware setup](https://github.com/MINT-SJTU/Evo-RL#2-hardware-setup) for the shared robot bring-up steps: SO-series assembly, stable serial/camera paths, camera validation, PiPER/PiPER-X CAN setup, and basic teleoperation checks.
+
+This repository only differs at the recording/deployment configuration layer:
+
+- `evo-rlt-record` reads a setup manifest from `--setup-json`, or from `~/.roboclaw/workspace/embodied/manifest.json` when the flag is omitted.
+- Arm entries point to per-device `calibration_dir` folders. The wrapper looks for `<calibration_dir>/<folder-name>.json`, then stages those files into temporary LeRobot-compatible names at runtime.
+- Follower calibrations are staged as `bimanual_left.json` and `bimanual_right.json` under a temporary robot calibration directory.
+- Leader calibrations are staged as `bimanual_leader_left.json` and `bimanual_leader_right.json` under a temporary teleop calibration directory.
+- Dataset paths are created under `<datasets.root>/<MMDD>_<dataset-tag>/<prefix>_<HHMMSS>`. If `datasets.root` is omitted, the default is `~/.roboclaw/workspace/embodied/datasets`.
+
+Example setup manifest:
+
+```json
+{
+  "datasets": {"root": "/path/to/lerobot_datasets"},
+  "arms": [
+    {
+      "alias": "left_follower",
+      "type": "follower",
+      "port": "/dev/serial/by-id/<left-follower>",
+      "calibration_dir": "/path/to/calibration/<left-follower-serial>"
+    },
+    {
+      "alias": "right_follower",
+      "type": "follower",
+      "port": "/dev/serial/by-id/<right-follower>",
+      "calibration_dir": "/path/to/calibration/<right-follower-serial>"
+    },
+    {
+      "alias": "left_leader",
+      "type": "leader",
+      "port": "/dev/serial/by-id/<left-leader>",
+      "calibration_dir": "/path/to/calibration/<left-leader-serial>"
+    },
+    {
+      "alias": "right_leader",
+      "type": "leader",
+      "port": "/dev/serial/by-id/<right-leader>",
+      "calibration_dir": "/path/to/calibration/<right-leader-serial>"
+    }
+  ],
+  "cameras": [
+    {
+      "alias": "left_wrist",
+      "port": "/dev/v4l/by-path/<left-wrist>",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    },
+    {
+      "alias": "right_wrist",
+      "port": "/dev/v4l/by-path/<right-wrist>",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    },
+    {
+      "alias": "right_front",
+      "port": "/dev/v4l/by-path/<right-front>",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    }
+  ]
+}
 ```
 
 ## Training Pipeline
@@ -176,207 +236,77 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
 
 ## Real-Robot Recording and Deployment
 
-`evo-rlt-record` wraps the LeRobot recording stack and injects RLT-specific policy, RTC, episode labels, teleop intervention, and background video encoding without modifying LeRobot source files. All robot ports, camera paths, calibration directories, dataset roots, and model checkpoints are supplied by the caller.
-
-### Robot setup manifest
-
-Pass `--setup-json` to every real-robot command, or place the same manifest at `~/.roboclaw/workspace/embodied/manifest.json`. The manifest is the only place that needs machine-specific robot paths.
-
-```json
-{
-  "datasets": {"root": "/path/to/lerobot_datasets"},
-  "arms": [
-    {
-      "alias": "left_follower",
-      "type": "follower",
-      "port": "/dev/serial/by-id/<left-follower>",
-      "calibration_dir": "/path/to/calibration/<left-follower-serial>"
-    },
-    {
-      "alias": "right_follower",
-      "type": "follower",
-      "port": "/dev/serial/by-id/<right-follower>",
-      "calibration_dir": "/path/to/calibration/<right-follower-serial>"
-    },
-    {
-      "alias": "left_leader",
-      "type": "leader",
-      "port": "/dev/serial/by-id/<left-leader>",
-      "calibration_dir": "/path/to/calibration/<left-leader-serial>"
-    },
-    {
-      "alias": "right_leader",
-      "type": "leader",
-      "port": "/dev/serial/by-id/<right-leader>",
-      "calibration_dir": "/path/to/calibration/<right-leader-serial>"
-    }
-  ],
-  "cameras": [
-    {
-      "alias": "left_wrist",
-      "port": "/dev/v4l/by-path/<left-wrist>",
-      "width": 640,
-      "height": 480,
-      "fps": 30,
-      "fourcc": "MJPG"
-    },
-    {
-      "alias": "right_wrist",
-      "port": "/dev/v4l/by-path/<right-wrist>",
-      "width": 640,
-      "height": 480,
-      "fps": 30,
-      "fourcc": "MJPG"
-    },
-    {
-      "alias": "right_front",
-      "port": "/dev/v4l/by-path/<right-front>",
-      "width": 640,
-      "height": 480,
-      "fps": 30,
-      "fourcc": "MJPG"
-    }
-  ]
-}
-```
-
-Follower and leader calibration files are copied into temporary LeRobot-compatible names at runtime. Dataset paths are created under `<datasets.root>/<MMDD>_<dataset-tag>/<prefix>_<HHMMSS>`.
-
 Set up the environment before running robot commands:
 
 ```bash
 cd /path/to/evo-rlt
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate evo-rl
-export PYTHONPATH=/path/to/evo-rlt/src:/path/to/evo-rl/src
+conda activate evo-rlt
+export PYTHONPATH=/path/to/evo-rlt/src:/path/to/lerobot/src
 export HF_HUB_OFFLINE=1
 ```
 
-### VLA-RLT-VLA full-process collection
-
-This mode records the whole episode from start to success/failure. Each episode starts in VLA by default, `r` toggles the RLT critical phase, and `space` temporarily enters teleop.
+Default VLA-RLT-VLA real-robot collection:
 
 ```bash
 evo-rlt-record collect \
   --setup-json /path/to/robot_manifest.json \
   --policy-path /path/to/rlt_ac_policy \
-  --vla-path /path/to/base_or_finetuned_vla.pt \
+  --vla-path /path/to/pi05_vla_checkpoint_or_dir \
   --rl-token-path /path/to/rl_token_policy \
-  --dataset-tag vla_rlt_vla_full \
-  --num-episodes 5 \
-  --episode-time-s 3000 \
-  --fps 30 \
-  --vcodec h264 \
+  --dataset-tag vla_rlt_vla_test \
   --rlt-toggle-key r \
   --teleop-toggle-key space \
-  --episode-outcome-key e \
-  --no-start-with-teleop \
-  --no-only-critical
+  --episode-outcome-key e
 ```
 
-Controls:
+The same collection entrypoint is exposed as `evo-rlt-collect-default` after reinstalling package entry points, but checkpoint and setup paths still need to be supplied by the caller.
+
+Default collection controls:
 
 ```text
-r              enter or exit RLT critical phase
-space          enter teleop intervention; press again to return to the previous VLA/RLT state
-e              save success after the double-tap window
-e+e            save failure
+r              toggle RLT critical phase
+space          toggle teleop intervention; pressing again exits teleop
+e              save the episode as success after the double-tap window
+e+e            save the episode as failure
 left arrow     rerecord the current episode
 Esc            stop data collection
 ```
 
-Default RTC settings match the validated real-robot deployment script: RLT horizon `10`, VLA horizon `25`, action-queue refill threshold `30`, max guidance weight `10.0`, and prefix attention schedule `EXP`.
+Validated RTC defaults for this collection mode:
 
-### RLT-only critical-segment collection
-
-Use `--only-critical` when the dataset should contain only the RLT segment. Recording waits until the first `r`, continues across temporary teleop interventions, and ends when RLT is exited. A single `r` exit saves success; `r+r` inside `--double-tap-window-s` saves failure.
-
-```bash
-evo-rlt-record collect \
-  --setup-json /path/to/robot_manifest.json \
-  --policy-path /path/to/rlt_ac_policy \
-  --vla-path /path/to/base_or_finetuned_vla.pt \
-  --rl-token-path /path/to/rl_token_policy \
-  --dataset-tag vla_rlt_vla_only_critical \
-  --num-episodes 5 \
-  --episode-time-s 3000 \
-  --fps 30 \
-  --vcodec h264 \
-  --rlt-toggle-key r \
-  --teleop-toggle-key space \
-  --only-critical \
-  --no-start-with-teleop
+```text
+RLT RTC execution horizon: 10
+VLA RTC execution horizon: 25
+RTC action queue refill threshold: 30
 ```
 
-In `--only-critical --no-start-with-teleop`, the wrapper skips LeRobot's policy-less between-episode teleop reset loop so the next episode returns to VLA and waits for the next RLT start.
-
-### Starting episodes in teleop
-
-Add `--start-with-teleop` when each episode should begin under teleop control. Pressing the teleop key exits teleop and returns to the state that was active before the intervention. This flag works with both full-process and RLT-only collection.
-
-```bash
-evo-rlt-record collect \
-  --setup-json /path/to/robot_manifest.json \
-  --policy-path /path/to/rlt_ac_policy \
-  --dataset-tag teleop_start_only_critical \
-  --only-critical \
-  --start-with-teleop
-```
-
-### Other record modes
-
-`segment` records a key segment and labels success/failure on that segment:
-
-```bash
-evo-rlt-record segment \
-  --setup-json /path/to/robot_manifest.json \
-  --initial-source teleop \
-  --critical-source rlt \
-  --policy-path /path/to/rlt_ac_policy \
-  --vla-path /path/to/base_or_finetuned_vla.pt \
-  --rl-token-path /path/to/rl_token_policy \
-  --dataset-tag rlt_segment \
-  --num-episodes 5 \
-  --episode-time-s 3000 \
-  --fps 30 \
-  --vcodec h264
-```
-
-`full` records a complete trajectory with a fixed initial source. This is useful for VLA-only or teleop-only baselines:
+VLA-only full-process recording with pedal outcome labels:
 
 ```bash
 evo-rlt-record full \
-  --setup-json /path/to/robot_manifest.json \
   --initial-source vla \
-  --policy-path /path/to/vla_or_rlt_policy \
-  --vla-path /path/to/base_or_finetuned_vla.pt \
+  --policy-path <AC_OR_VLA_POLICY_PATH> \
+  --vla-path <BASE_OR_FINETUNED_VLA_PT> \
   --phase-mode always_vla \
   --chunk-exec-steps 25 \
   --pedal-outcome \
-  --episode-outcome-key e \
   --double-tap-window-s 0.6 \
-  --dataset-tag vla_full \
   --num-episodes 5 \
   --episode-time-s 3000 \
   --reset-time-s 0 \
   --fps 30 \
-  --vcodec h264
+  --vcodec h264 \
+  --dataset-tag vla_full_pedal \
+  --no-teleop
 ```
 
-`live` runs a policy on the robot without saving a dataset:
+Pedal semantics in this mode:
 
-```bash
-evo-rlt-record live \
-  --setup-json /path/to/robot_manifest.json \
-  --policy-path /path/to/policy \
-  --eval-script /path/to/eval_with_real_robot.py \
-  --phase-mode always_vla \
-  --chunk-exec-steps 25 \
-  --duration 120 \
-  --fps 30
+```text
+single tap    success, end current episode, start next episode
+double tap    failure, end current episode, start next episode
 ```
-
-`evo-rlt-collect-default` is an alias for `evo-rlt-record collect`. During recording, each saved episode is submitted to a single-worker background video encoder so image-to-video conversion does not block the next episode; normal shutdown waits for any queued encoding to finish.
 
 ## Repository Layout
 
@@ -396,7 +326,7 @@ PYTHONPATH=src python -m compileall -q src/evo_rlt tests/rlt
 
 ## Model & Dataset
 
-Models, datasets, and demonstration videos will be linked here after public release.
+Models and datasets will be linked here after public release. The current rollout demo is available above as `website/assets/videos/rlt_rollout.mp4`.
 
 ## Citation
 
@@ -404,4 +334,4 @@ Citation information will be added with the paper release.
 
 ## License
 
-This project follows the Evo-RL release convention and is distributed under the Apache-2.0 license.
+Apache-2.0. See [LICENSE](./LICENSE).
