@@ -5,14 +5,13 @@
   <a href="https://huggingface.co/datasets/Elvinky/bi-so101-insert-screw-562ep"><img alt="training dataset" src="https://img.shields.io/static/v1?label=Dataset&message=562ep&color=22c55e"/></a>
   <a href="https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main"><img alt="model" src="https://img.shields.io/static/v1?label=Model&message=pi0.5&color=0ea5e9"/></a>
   <a href="https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main"><img alt="checkpoint" src="https://img.shields.io/static/v1?label=Ckpt&message=Available&color=6366f1"/></a>
-  <a href="#citation"><img alt="paper coming soon" src="https://img.shields.io/static/v1?label=Paper&message=Coming%20Soon&color=9ca3af"/></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/License-Apache--2.0-ef4444"/></a>
 </p>
 
 <p align="center"><strong>SJTU-MINT</strong></p>
 
 <p align="center">
-  <strong>An LeRobot-based reproduction of [Physical Intelligence‘s work RLT](https://www.pi.website/research/rlt), covering RL-token learning, transition-cache generation, actor-critic training, and real-robot rollout.</strong>
+  <strong>An LeRobot-based reproduction of [RLT](https://www.pi.website/research/rlt), covering RL-token learning, transition-cache generation, actor-critic training, and real-robot rollout.</strong>
 </p>
 
 <p align="center"><strong>Real-Robot Rollout Demo</strong></p>
@@ -23,7 +22,7 @@
 
 ## 🎯 Evo-RLT Focus
 
-- **RLT reproduction:** this repository presents RLT as an independent LeRobot-based reproduction for the pi paper, rather than as a branch or submodule of another project.
+- **RLT reproduction:** this repository presents RLT as an independent LeRobot-based reproduction for the pi paper.
 - **Open training path:** the code covers VLA finetuning, RL-token learning, transition-cache generation, and chunk actor-critic training.
 - **Real-robot deployment path:** the recording wrapper supports VLA/RLT rollout, RTC defaults, pedal labels, and human-in-the-loop collection.
 
@@ -361,12 +360,6 @@ PYTHONPATH=src python -m compileall -q src/evo_rlt tests/rlt
   <img alt="SJTU community visual" src="./website/assets/images/sjtu.png" height="68"/>
   <img alt="EvoMind" src="./website/assets/images/evomind1.png" height="60"/>
 </p>
-
-<a id="citation"></a>
-
-## 📖 Citation
-
-Citation information will be added with the paper release.
 
 <a id="license"></a>
 
