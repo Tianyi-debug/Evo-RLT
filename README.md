@@ -16,12 +16,8 @@
 <p align="center"><strong>Real-Robot Rollout Demo</strong></p>
 
 <p align="center">
-  <a href="./website/assets/videos/rlt_rollout.mp4">
-    <img alt="RLT real-robot rollout demo" src="./website/assets/images/rlt_rollout.gif" width="96%"/>
-  </a>
+  <img alt="RLT real-robot rollout demo" src="./website/assets/images/rlt_rollout.gif" width="96%"/>
 </p>
-
-<p align="center"><a href="./website/assets/videos/rlt_rollout.mp4">Open the MP4 demo</a></p>
 
 ## 🎯 Evo-RLT Focus
 
@@ -31,8 +27,9 @@
 
 ## 📰 News
 
+- **[2026-06-26]** Added a higher-quality rollout GIF and affiliations.
 - **[2026-06-26]** Added training dataset and checkpoint links, and folded runtime registration into installation.
-- **[2026-06-25]** Added a GitHub-rendered rollout GIF and direct MP4 demo link.
+- **[2026-06-25]** Added a GitHub-rendered rollout GIF for the repository homepage.
 - **[2026-06-25]** Refreshed the README to describe Evo-RLT as a standalone RLT reproduction and added hardware setup differences from Evo-RL.
 
 ## 🧭 Table of Contents
@@ -42,8 +39,8 @@
 | [⚡ Quick Start](#quick-start) | [🧪 Training Pipeline](#training-pipeline) | [🤗 Model & Dataset](#model-dataset) |
 | [1) Installation](#installation) | [3) Finetune VLA](#finetune-vla) | [🗂️ Repository Layout](#repository-layout) |
 | [2) Hardware Setup](#hardware-setup) | [4) Train RL Token](#train-rl-token) | [✅ Development Checks](#development-checks) |
-| [🤖 Real-Robot Recording and Deployment](#real-robot-recording-and-deployment) | [5) Build Transition Cache](#build-transition-cache) | [📖 Citation](#citation) / [📄 License](#license) |
-| | [6) Train Chunk Actor-Critic](#train-chunk-actor-critic) | |
+| [🤖 Real-Robot Recording and Deployment](#real-robot-recording-and-deployment) | [5) Build Transition Cache](#build-transition-cache) | [🏫 Affiliations](#affiliations) |
+| | [6) Train Chunk Actor-Critic](#train-chunk-actor-critic) | [📖 Citation](#citation) / [📄 License](#license) |
 
 <a id="quick-start"></a>
 
@@ -355,7 +352,16 @@ PYTHONPATH=src python -m compileall -q src/evo_rlt tests/rlt
 
 - Training dataset: [Elvinky/bi-so101-insert-screw-562ep](https://huggingface.co/datasets/Elvinky/bi-so101-insert-screw-562ep).
 - Checkpoint repo: [Shiki42/pi05_screw_c_mix_cont15k_fp16](https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main).
-- Rollout demo: `website/assets/images/rlt_rollout.gif`, with the original MP4 at `website/assets/videos/rlt_rollout.mp4`.
+- Rollout demo: displayed above from `website/assets/images/rlt_rollout.gif`.
+
+<a id="affiliations"></a>
+
+## 🏫 Affiliations
+
+<p align="center">
+  <img alt="SJTU community visual" src="./website/assets/images/sjtu.png" height="68"/>
+  <img alt="EvoMind" src="./website/assets/images/evomind1.png" height="60"/>
+</p>
 
 <a id="citation"></a>
 
