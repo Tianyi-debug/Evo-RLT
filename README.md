@@ -2,8 +2,10 @@
 
 <p align="center">
   <a href="https://github.com/huggingface/lerobot"><img alt="lerobot version" src="https://img.shields.io/badge/LeRobot-0.4.4-f59e0b"/></a>
+  <a href="https://huggingface.co/datasets/Elvinky/bi-so101-insert-screw-562ep"><img alt="training dataset" src="https://img.shields.io/static/v1?label=Dataset&message=562ep&color=22c55e"/></a>
+  <a href="https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main"><img alt="model" src="https://img.shields.io/static/v1?label=Model&message=pi0.5&color=0ea5e9"/></a>
+  <a href="https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main"><img alt="checkpoint" src="https://img.shields.io/static/v1?label=Ckpt&message=Available&color=6366f1"/></a>
   <a href="#citation"><img alt="paper coming soon" src="https://img.shields.io/static/v1?label=Paper&message=Coming%20Soon&color=9ca3af"/></a>
-  <a href="#model-dataset"><img alt="model and dataset available" src="https://img.shields.io/static/v1?label=Model%20%2F%20Dataset&message=Available&color=22c55e"/></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/License-Apache--2.0-ef4444"/></a>
 </p>
 
