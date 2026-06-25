@@ -23,7 +23,7 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file
 
-from lerobot.configs.train import RLTokenJointConfig
+from evo_rlt.adapters.lerobot.training_config import RLTokenJointConfig
 from evo_rlt.core.rl_token import RLTokenModule
 from evo_rlt.adapters.lerobot.train_utils import (
     RL_TOKEN_DIR,

@@ -6,7 +6,7 @@ import torch
 
 from evo_rlt.core.interfaces import ChunkTransition
 from evo_rlt.core.replay_buffer import ReplayBuffer
-from lerobot.utils.recording_annotations import SOURCE_HUMAN
+from evo_rlt.adapters.lerobot.record.annotations import SOURCE_HUMAN
 
 logger = logging.getLogger(__name__)
 

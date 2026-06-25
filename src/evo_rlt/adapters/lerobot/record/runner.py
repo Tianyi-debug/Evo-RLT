@@ -46,10 +46,6 @@ def prepare_lerobot_runtime(
             double_tap_episode_outcome_key,
         )
     register()
-    # lerobot_rlt_record imports ChunkACPolicy through this concrete module path.
-    import evo_rlt.adapters.lerobot.policies.modeling_rlt_ac as modeling_rlt_ac
-
-    sys.modules["lerobot.policies.rlt.modeling_rlt_ac"] = modeling_rlt_ac
     if intervention_toggle_key is not None:
         _patch_record_intervention_toggle_key(intervention_toggle_key)
     if skip_policyless_reset_loop:
@@ -208,12 +204,12 @@ def _patch_double_tap_episode_outcome_listener(
 
 
 def _patch_record_intervention_toggle_key(toggle_key: str) -> None:
-    from lerobot.scripts import lerobot_rlt_record
+    from evo_rlt.adapters.lerobot.record import backend
 
-    if getattr(lerobot_rlt_record.init_keyboard_listener, "_evo_rlt_intervention_key", None):
+    if getattr(backend.init_keyboard_listener, "_evo_rlt_intervention_key", None):
         return
 
-    original_init_keyboard_listener = lerobot_rlt_record.init_keyboard_listener
+    original_init_keyboard_listener = backend.init_keyboard_listener
     keyboard_toggle_key = _keyboard_key_arg(toggle_key)
 
     def init_keyboard_listener(*args, **kwargs):
@@ -221,16 +217,16 @@ def _patch_record_intervention_toggle_key(toggle_key: str) -> None:
         return original_init_keyboard_listener(*args, **kwargs)
 
     init_keyboard_listener._evo_rlt_intervention_key = _event_key_name(toggle_key)
-    lerobot_rlt_record.init_keyboard_listener = init_keyboard_listener
+    backend.init_keyboard_listener = init_keyboard_listener
 
 
 def _patch_skip_policyless_reset_loop() -> None:
-    from lerobot.scripts import lerobot_rlt_record
+    from evo_rlt.adapters.lerobot.record import backend
 
-    if getattr(lerobot_rlt_record.record_loop, "_evo_rlt_skip_policyless_reset_loop", False):
+    if getattr(backend.record_loop, "_evo_rlt_skip_policyless_reset_loop", False):
         return
 
-    original_record_loop = lerobot_rlt_record.record_loop
+    original_record_loop = backend.record_loop
 
     def record_loop(*args, **kwargs):
         if kwargs.get("policy") is None and kwargs.get("dataset") is None:
@@ -239,7 +235,7 @@ def _patch_skip_policyless_reset_loop() -> None:
         return original_record_loop(*args, **kwargs)
 
     record_loop._evo_rlt_skip_policyless_reset_loop = True
-    lerobot_rlt_record.record_loop = record_loop
+    backend.record_loop = record_loop
 
 
 def _metadata_buffer_to_pydict(metadata_buffer: list[dict], numpy_module: Any) -> dict:
@@ -462,7 +458,7 @@ def run_collect(args: argparse.Namespace) -> None:
             skip_policyless_reset_loop=args.only_critical and not args.start_with_teleop,
             background_episode_video_encoding=True,
         )
-        from lerobot.scripts.lerobot_rlt_record import record
+        from evo_rlt.adapters.lerobot.record.backend import record
 
         record()
 
@@ -594,7 +590,7 @@ def run_segment(args: argparse.Namespace) -> None:
             return
 
         prepare_lerobot_runtime(background_episode_video_encoding=True)
-        from lerobot.scripts.lerobot_rlt_record import record
+        from evo_rlt.adapters.lerobot.record.backend import record
 
         record()
 
@@ -753,7 +749,7 @@ def run_full(args: argparse.Namespace) -> None:
             ),
             background_episode_video_encoding=True,
         )
-        from lerobot.scripts.lerobot_rlt_record import record
+        from evo_rlt.adapters.lerobot.record.backend import record
 
         record()
 

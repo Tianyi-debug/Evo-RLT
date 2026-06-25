@@ -1,8 +1,9 @@
 import sys
+import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import time
 
 from evo_rlt.adapters.lerobot.record.cli import build_parser
 from evo_rlt.adapters.lerobot.record import runner
@@ -130,7 +131,7 @@ def test_double_tap_episode_outcome_key_marks_success_and_failure(monkeypatch):
 
 
 def test_skip_policyless_reset_loop_keeps_recording_loop(monkeypatch):
-    lerobot_rlt_record = pytest.importorskip("lerobot.scripts.lerobot_rlt_record")
+    from evo_rlt.adapters.lerobot.record import backend as lerobot_rlt_record
 
     calls = []
 
@@ -437,3 +438,25 @@ def test_full_vla_pedal_outcome_parser():
     assert args.phase_mode == "always_vla"
     assert args.chunk_exec_steps == 25
     assert args.reset_time_s == 0
+
+
+def test_evo_rlt_recording_does_not_import_lerobot_fork_only_modules():
+    source_root = Path(__file__).parents[2] / "src" / "evo_rlt"
+    banned_imports = [
+        "lerobot.scripts.lerobot_rlt_record",
+        "lerobot.scripts.recording_hil",
+        "lerobot.scripts.recording_loop",
+        "lerobot.scripts.robot_config_loader",
+        "lerobot.utils.recording_annotations",
+        "lerobot.rl.acp_tags",
+        "lerobot.policies.rlt",
+    ]
+
+    offenders = []
+    for py_file in source_root.rglob("*.py"):
+        text = py_file.read_text()
+        for banned in banned_imports:
+            if banned in text:
+                offenders.append(f"{py_file.relative_to(source_root)}: {banned}")
+
+    assert offenders == []
