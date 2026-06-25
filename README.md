@@ -1,7 +1,7 @@
 <h1 align="center">Evo-RLT</h1>
 
 <p align="center">
-  <a href="https://github.com/huggingface/lerobot"><img alt="lerobot version" src="https://img.shields.io/badge/LeRobot-%3E%3D0.4.4%2C%3C0.5.0-f59e0b"/></a>
+  <a href="https://github.com/huggingface/lerobot"><img alt="lerobot version" src="https://img.shields.io/badge/LeRobot-v0.5.1-f59e0b"/></a>
   <a href="https://huggingface.co/datasets/Elvinky/bi-so101-insert-screw-562ep"><img alt="training dataset" src="https://img.shields.io/static/v1?label=Dataset&message=562ep&color=22c55e"/></a>
   <a href="https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main"><img alt="model" src="https://img.shields.io/static/v1?label=Model&message=pi0.5&color=0ea5e9"/></a>
   <a href="https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main"><img alt="checkpoint" src="https://img.shields.io/static/v1?label=Ckpt&message=Available&color=6366f1"/></a>
@@ -48,14 +48,16 @@
 
 ### 1) Installation
 
+Evo-RLT depends on LeRobot `v0.5.1`, which currently ships from the official GitHub tag and requires Python 3.12+.
+
 ```bash
 git clone https://github.com/Shiki42/evo-rlt.git
 cd evo-rlt
 
-conda create -y -n evo-rlt python=3.10
+conda create -y -n evo-rlt python=3.12
 conda activate evo-rlt
 
-pip install -e ".[lerobot]"
+python -m pip install -e ".[lerobot]"
 ```
 
 If you are using a local LeRobot checkout instead of the package dependency, put this repository and that checkout on `PYTHONPATH`:
