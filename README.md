@@ -12,7 +12,7 @@
 <p align="center"><strong>SJTU-MINT</strong></p>
 
 <p align="center">
-  <strong>An independent LeRobot-based reproduction of RLT for the pi paper, covering RL-token learning, transition-cache generation, actor-critic training, and real-robot rollout.</strong>
+  <strong>An LeRobot-based reproduction of [Physical Intelligence‘s work RLT](https://www.pi.website/research/rlt), covering RL-token learning, transition-cache generation, actor-critic training, and real-robot rollout.</strong>
 </p>
 
 <p align="center"><strong>Real-Robot Rollout Demo</strong></p>
@@ -23,16 +23,13 @@
 
 ## 🎯 Evo-RLT Focus
 
-- **Standalone RLT reproduction:** this repository presents RLT as an independent LeRobot-based reproduction for the pi paper, rather than as a branch or submodule of another project.
+- **RLT reproduction:** this repository presents RLT as an independent LeRobot-based reproduction for the pi paper, rather than as a branch or submodule of another project.
 - **Open training path:** the code covers VLA finetuning, RL-token learning, transition-cache generation, and chunk actor-critic training.
 - **Real-robot deployment path:** the recording wrapper supports VLA/RLT rollout, RTC defaults, pedal labels, and human-in-the-loop collection.
 
 ## 📰 News
 
-- **[2026-06-26]** Added a higher-quality rollout GIF and affiliations.
-- **[2026-06-26]** Added training dataset and checkpoint links, and folded runtime registration into installation.
-- **[2026-06-25]** Added a GitHub-rendered rollout GIF for the repository homepage.
-- **[2026-06-25]** Refreshed the README to describe Evo-RLT as a standalone RLT reproduction and added hardware setup differences from Evo-RL.
+- **[2026-06-26]** Added training dataset and checkpoint links.
 
 ## 🧭 Table of Contents
 
