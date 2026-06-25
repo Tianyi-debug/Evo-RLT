@@ -350,7 +350,6 @@ PYTHONPATH=src python -m compileall -q src/evo_rlt tests/rlt
 
 - Training dataset: [Elvinky/bi-so101-insert-screw-562ep](https://huggingface.co/datasets/Elvinky/bi-so101-insert-screw-562ep).
 - Checkpoint repo: [Shiki42/pi05_screw_c_mix_cont15k_fp16](https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main).
-- Rollout demo: displayed above from `website/assets/images/rlt_rollout.gif`.
 
 <a id="affiliations"></a>
 
