@@ -99,7 +99,7 @@ class Pi05VLAAdapter(VLAAdapter):
 
         tokenizer_id = tokenizer_path or "google/paligemma-3b-pt-224"
         self.tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_id, cache_dir=cache_dir, local_files_only=True,
+            tokenizer_id, cache_dir=cache_dir,
         )
         self.tokenizer.padding_side = "right"
 
@@ -227,9 +227,8 @@ class Pi05VLAAdapter(VLAAdapter):
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
         prefix_att_2d_masks_4d = self.pi05._prepare_attention_masks_4d(prefix_att_2d_masks)
-        prefix_att_2d_masks_4d = prefix_att_2d_masks_4d.to(dtype=prefix_embs.dtype)
 
-        self.pi05.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "sdpa"
+        self.pi05.paligemma_with_expert.paligemma.model.language_model.config._attn_implementation = "eager"
         outputs, past_key_values = self.pi05.paligemma_with_expert.forward(
             attention_mask=prefix_att_2d_masks_4d,
             position_ids=prefix_position_ids,

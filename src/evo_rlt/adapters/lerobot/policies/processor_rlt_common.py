@@ -17,16 +17,16 @@ from lerobot.utils.constants import (
 
 def load_sft_pi05_processors(
     vla_pretrained_path: str,
+    tokenizer_path: str = "google/paligemma-3b-pt-224",
 ) -> tuple[
     PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """Load the SFT pi05 pre/post-processor pair verbatim from disk.
 
-    The SFT JSON hard-codes ``tokenizer_name`` to an in-house path
-    (``/llm_jzm/...``) that only exists on the original training cluster; we
-    override to the public HF id so the loaded pipeline (and the JSON re-saved
-    by the host policy's ckpt dir) is portable across deploy machines.
+    The SFT JSON can hard-code ``tokenizer_name`` to an in-house path
+    (``/llm_jzm/...``) that only exists on the original training cluster.  We
+    override it so deployment can point at an explicit local tokenizer snapshot.
     """
     if not vla_pretrained_path:
         raise ValueError(
@@ -34,11 +34,10 @@ def load_sft_pi05_processors(
             "QUANTILES stats — deploy parity depends on it."
         )
 
-    tokenizer_name = "google/paligemma-3b-pt-224"
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_name, local_files_only=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     overrides = {
         "tokenizer_processor": {
-            "tokenizer_name": tokenizer_name,
+            "tokenizer_name": tokenizer_path,
             "tokenizer": tokenizer,
         }
     }

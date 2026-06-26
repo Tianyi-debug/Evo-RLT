@@ -41,6 +41,7 @@ class RLTDemoDataset(Dataset):
         state_key: str = "observation.state",
         action_key: str = "action",
         normalize_actions: bool = False,
+        tolerance_s: float = 0.04,
     ):
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
@@ -53,6 +54,7 @@ class RLTDemoDataset(Dataset):
             root=dataset_path,
             revision="main",
             delta_timestamps=delta_timestamps,
+            tolerance_s=tolerance_s,
             video_backend="pyav",
         )
 
@@ -210,6 +212,7 @@ def make_demo_loader(
     image_size: tuple[int, int] = (224, 224),
     num_workers: int = 2,
     device: str = "cuda",
+    tolerance_s: float = 0.04,
 ) -> Iterator[tuple[Observation, torch.Tensor]]:
     """Create an infinite-cycling DataLoader for demo adaptation.
 
@@ -221,6 +224,7 @@ def make_demo_loader(
         chunk_length=chunk_length,
         camera_keys=camera_keys,
         image_size=image_size,
+        tolerance_s=tolerance_s,
     )
     loader = DataLoader(
         dataset,

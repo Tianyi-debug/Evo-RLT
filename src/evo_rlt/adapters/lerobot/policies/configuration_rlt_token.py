@@ -34,6 +34,7 @@ class RLTokenPolicyConfig(PreTrainedConfig):
     rl_token_dec_layers: int = 3
     rl_token_ff_dim: int = 4096
     rl_token_num_rl_tokens: int = 1
+    rl_token_init_scale: float = 0.02
 
     # --- Prefix token postprocessing (before RL token encoder) ---
     token_pool_size: int = 0
@@ -76,6 +77,7 @@ class RLTokenPolicyConfig(PreTrainedConfig):
     max_action_dim: int = 32
     image_resolution: tuple[int, int] = (224, 224)
     tokenizer_max_length: int = 200
+    tokenizer_path: str = "google/paligemma-3b-pt-224"
 
     @classmethod
     def ensure_registered(cls) -> None:

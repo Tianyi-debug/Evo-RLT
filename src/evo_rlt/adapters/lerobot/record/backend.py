@@ -78,7 +78,8 @@ from lerobot.configs import parser
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
-from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts, write_info
+from lerobot.datasets.feature_utils import build_dataset_frame, combine_feature_dicts
+from lerobot.datasets.io_utils import write_info
 from lerobot.datasets.video_utils import VideoEncodingManager
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.processor import make_default_processors
@@ -133,8 +134,8 @@ from evo_rlt.adapters.lerobot.record.annotations import (
     normalize_episode_success_label,
     resolve_episode_success_label,
 )
+from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.utils import (
-    get_safe_torch_device,
     init_logging,
     log_say,
 )

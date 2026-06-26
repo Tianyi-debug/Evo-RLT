@@ -25,7 +25,7 @@ import torch
 
 from lerobot.datasets.image_writer import safe_stop_image_writer
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import build_dataset_frame
+from lerobot.datasets.feature_utils import build_dataset_frame
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.utils import make_robot_action
 from lerobot.processor import (
@@ -61,7 +61,8 @@ from evo_rlt.adapters.lerobot.record.annotations import (
     resolve_rlt_collector_policy_id,
 )
 from lerobot.utils.robot_utils import precise_sleep
-from lerobot.utils.utils import get_safe_torch_device, log_say
+from lerobot.utils.device_utils import get_safe_torch_device
+from lerobot.utils.utils import log_say
 from lerobot.utils.visualization_utils import log_rerun_data
 
 T = TypeVar("T")

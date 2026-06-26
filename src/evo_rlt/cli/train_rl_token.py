@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dec-layers", type=int, default=None, help="Override config.rl_token.dec_layers.")
     parser.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"], help="VLA model dtype")
     parser.add_argument("--vla-cache-dir", default=None, help="Optional Pi0.5 cache directory.")
+    parser.add_argument("--tokenizer-path", default=None, help="PaliGemma tokenizer repo id or local snapshot path.")
     return parser.parse_args()
 
 
@@ -81,6 +82,7 @@ def main() -> None:
         vla_cache_dir=args.vla_cache_dir,
         image_only=args.image_only,
         active_cameras=active_cameras,
+        tokenizer_path=args.tokenizer_path,
     )
     algorithm = RLTAlgorithm(policy, config)
     logger.info(

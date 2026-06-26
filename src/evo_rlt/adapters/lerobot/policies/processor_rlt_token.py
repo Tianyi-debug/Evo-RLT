@@ -26,4 +26,4 @@ def make_rlt_token_pre_post_processors(
     stats are authoritative.
     """
     del dataset_stats
-    return load_sft_pi05_processors(config.vla_pretrained_path)
+    return load_sft_pi05_processors(config.vla_pretrained_path, config.tokenizer_path)

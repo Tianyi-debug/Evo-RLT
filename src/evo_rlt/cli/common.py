@@ -45,6 +45,7 @@ def build_pi05_policy(
     vla_cache_dir: str | None = None,
     image_only: bool = False,
     active_cameras: list[str] | None = None,
+    tokenizer_path: str | None = None,
 ):
     from evo_rlt.adapters.lerobot.pi05_adapter import Pi05VLAAdapter
     from evo_rlt.core.policy import RLTPolicy
@@ -61,6 +62,7 @@ def build_pi05_policy(
         token_pool_size=token_pool_size,
         image_only=image_only,
         active_cameras=active_cameras,
+        tokenizer_path=tokenizer_path,
     )
     policy = RLTPolicy(config, vla).to(device)
     if rl_token_checkpoint is not None:

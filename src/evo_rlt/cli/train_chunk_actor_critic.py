@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-only", action="store_true", help="Drop language tokens before RL token encode (image-patch tokens only).")
     parser.add_argument("--task-instruction", default="pick up the object")
     parser.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32"])
+    parser.add_argument("--tokenizer-path", default=None, help="PaliGemma tokenizer repo id or local snapshot path.")
     return parser.parse_args()
 
 
@@ -126,6 +127,7 @@ def create_algorithm_with_pi05(config, args: argparse.Namespace):
         dtype=args.dtype,
         rl_token_checkpoint=args.rl_token_checkpoint,
         image_only=args.image_only,
+        tokenizer_path=args.tokenizer_path,
     )
     policy.freeze_vla()
     policy.freeze_rl_token_encoder()

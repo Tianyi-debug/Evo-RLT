@@ -25,6 +25,7 @@ from torch.utils.data import DataLoader, Subset
 
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from evo_rlt.adapters.lerobot.policies.action_modifier import PrefixOutputCapture
+from evo_rlt.adapters.lerobot.policies.configuration_rlt_token import RLTokenPolicyConfig
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_token import RLTokenPolicy
 from evo_rlt.adapters.lerobot.policies.processor_rlt_token import make_rlt_token_pre_post_processors
 from evo_rlt.adapters.lerobot.offline_dataset import build_overlap_frame_indices
@@ -37,6 +38,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--rl-token-policy-path", required=True)
     p.add_argument("--vla-pretrained-path", required=True,
                    help="SFT pi05 ckpt dir — preprocessor source. Must match deploy.")
+    p.add_argument("--tokenizer-path", default=None,
+                   help="PaliGemma tokenizer repo id or local snapshot path for the SFT preprocessor.")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--task-instruction", default="screw")
     p.add_argument("--chunk-length", type=int, default=10)
@@ -49,6 +52,8 @@ def parse_args() -> argparse.Namespace:
                    help="Cap on episodes to process (debug).")
     p.add_argument("--video-backend", default="pyav",
                    help="Video decoder backend passed to LeRobotDataset.")
+    p.add_argument("--tolerance-s", type=float, default=0.04,
+                   help="Timestamp tolerance passed to LeRobotDataset video decoding.")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--empty-cache-every", type=int, default=4,
                    help="Call torch.cuda.empty_cache() every N batches.")
@@ -166,11 +171,14 @@ def main() -> None:
 
     _log(f"args: {vars(args)}")
     _log(f"load RLTokenPolicy from {args.rl_token_policy_path}")
+    RLTokenPolicyConfig.ensure_registered()
     policy = RLTokenPolicy.from_pretrained(args.rl_token_policy_path).to(args.device).eval()
     cfg = policy.config
     # Override the policy's recorded vla path so the preprocessor we load is the
     # SFT pi05's, even if the RL Token ckpt was trained against a different one.
     cfg.vla_pretrained_path = args.vla_pretrained_path
+    if args.tokenizer_path is not None:
+        cfg.tokenizer_path = args.tokenizer_path
 
     _log(f"load preprocessor from SFT pi05 dir {args.vla_pretrained_path}")
     preprocessor, _ = make_rlt_token_pre_post_processors(config=cfg)
@@ -181,6 +189,7 @@ def main() -> None:
         repo_id=args.demo_dataset_repo_id,
         root=args.demo_dataset_root,
         delta_timestamps=delta,
+        tolerance_s=args.tolerance_s,
         video_backend=args.video_backend,
     )
     n_episodes = dataset.num_episodes
