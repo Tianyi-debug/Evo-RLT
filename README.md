@@ -60,11 +60,7 @@ conda activate evo-rlt
 python -m pip install -e ".[lerobot]"
 ```
 
-If you are using a local LeRobot checkout instead of the package dependency, put this repository and that checkout on `PYTHONPATH`:
-
-```bash
-export PYTHONPATH=/path/to/evo-rlt/src:/path/to/lerobot/src
-```
+Do not put a local LeRobot source checkout on `PYTHONPATH`; Evo-RLT is tested against the official LeRobot package installed by the `lerobot` extra.
 
 Evo-RLT keeps policy registration out of LeRobot source files. Before using LeRobot factory helpers with RLT policy types, register the adapter once:
 
@@ -195,6 +191,7 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --policy.vla_pretrained_path=outputs/vla_ft/checkpoints/last/pretrained_model \
   --policy.vla_dtype=bfloat16 \
   --policy.rl_token_num_rl_tokens=1 \
+  --policy.tokenizer_path=/path/to/paligemma-3b-pt-224-snapshot \
   --policy.token_pool_size=0 \
   --policy.device=cuda \
   --batch_size=8 \
@@ -215,6 +212,7 @@ evo-rlt-build-transition-cache-v2 \
   --demo-dataset-root <LOCAL_DATASET_ROOT> \
   --rl-token-policy-path outputs/rl_token/checkpoints/last/pretrained_model \
   --vla-pretrained-path outputs/vla_ft/checkpoints/last/pretrained_model \
+  --tokenizer-path /path/to/paligemma-3b-pt-224-snapshot \
   --output-dir outputs/cache \
   --task-instruction "<TASK>" \
   --chunk-length 10 \
@@ -222,6 +220,7 @@ evo-rlt-build-transition-cache-v2 \
   --batch-size 8 \
   --num-workers 2 \
   --train-ratio 0.9 \
+  --tolerance-s 0.04 \
   --device cuda
 ```
 
@@ -260,7 +259,7 @@ Set up the environment before running robot commands:
 cd /path/to/evo-rlt
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate evo-rlt
-export PYTHONPATH=/path/to/evo-rlt/src:/path/to/lerobot/src
+python -m pip install -e ".[lerobot]"
 export HF_HUB_OFFLINE=1
 ```
 
