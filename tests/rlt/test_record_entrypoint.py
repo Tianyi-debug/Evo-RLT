@@ -149,80 +149,42 @@ def test_skip_policyless_reset_loop_keeps_recording_loop(monkeypatch):
     assert len(calls) == 1
 
 
-def test_background_episode_video_encoding_submits_after_save(monkeypatch):
+def test_save_episode_patch_forces_official_immediate_video_save(monkeypatch):
     calls = []
-
-    class FakeFuture:
-        def __init__(self, fn, args):
-            self.fn = fn
-            self.args = args
-
-        def result(self):
-            return self.fn(*self.args)
-
-    class FakeExecutor:
-        def __init__(self, max_workers, thread_name_prefix):
-            calls.append(("executor", max_workers, thread_name_prefix))
-
-        def submit(self, fn, *args):
-            calls.append(("submit", args))
-            return FakeFuture(fn, args)
-
-        def shutdown(self, wait):
-            calls.append(("shutdown", wait))
 
     class FakeMeta:
         total_episodes = 0
         video_keys = ["observation.images.wrist"]
 
-        def _close_writer(self):
-            calls.append(("close_writer", self.total_episodes))
+        def save_episode(self, episode_index, episode_length, episode_tasks, episode_stats, episode_metadata):
+            calls.append(("meta", dict(episode_metadata)))
+            self.total_episodes += 1
+
+    class FakeWriter:
+        def __init__(self):
+            self._batch_encoding_size = 6
 
     class FakeLeRobotDataset:
         def __init__(self):
             self.meta = FakeMeta()
-            self.batch_encoding_size = 6
-            self.episodes_since_last_encoding = 0
+            self.writer = FakeWriter()
 
-        def save_episode(self):
-            calls.append(("save", self.batch_encoding_size))
-            self.meta.total_episodes += 1
-            self.episodes_since_last_encoding += 1
+        def save_episode(self, *args, **kwargs):
+            calls.append(("save", self.writer._batch_encoding_size, kwargs))
+            self.meta.save_episode(0, 1, ["task"], {}, {"base": "metadata"})
             return "saved"
-
-        def _batch_save_episode_video(self, start_episode, end_episode):
-            calls.append(("batch", start_episode, end_episode))
-
-    class FakeVideoEncodingManager:
-        def __init__(self, dataset):
-            self.dataset = dataset
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            calls.append(("exit", self.dataset.episodes_since_last_encoding))
-            return False
 
     fake_lerobot_dataset = type(sys)("lerobot.datasets.lerobot_dataset")
     fake_lerobot_dataset.LeRobotDataset = FakeLeRobotDataset
-    fake_video_utils = type(sys)("lerobot.datasets.video_utils")
-    fake_video_utils.VideoEncodingManager = FakeVideoEncodingManager
     monkeypatch.setitem(sys.modules, "lerobot.datasets.lerobot_dataset", fake_lerobot_dataset)
-    monkeypatch.setitem(sys.modules, "lerobot.datasets.video_utils", fake_video_utils)
-    monkeypatch.setattr(runner.concurrent.futures, "ThreadPoolExecutor", FakeExecutor)
 
-    runner._patch_background_episode_video_encoding()
+    runner._patch_save_episode_metadata_and_immediate_video_encoding()
 
     dataset = FakeLeRobotDataset()
-    assert dataset.save_episode() == "saved"
-    assert ("close_writer", 1) in calls
-    assert ("submit", (0, 1)) in calls
-    assert not any(call[0] == "batch" for call in calls)
-    assert dataset.batch_encoding_size == 6
-    assert dataset.episodes_since_last_encoding == 0
-
-    FakeVideoEncodingManager(dataset).__exit__(None, None, None)
-    assert ("batch", 0, 1) in calls
-    assert ("shutdown", True) in calls
-    assert ("exit", 0) in calls
+    assert dataset.save_episode(extra_episode_metadata={"episode_success": "success"}) == "saved"
+    assert ("save", 1, {}) in calls
+    assert ("meta", {"base": "metadata", "episode_success": "success"}) in calls
+    assert dataset.writer._batch_encoding_size == 6
 
 
 def test_default_collect_parser_requires_user_policy_path():

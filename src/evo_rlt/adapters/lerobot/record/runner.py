@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import logging
 import runpy
 import sys
@@ -52,7 +51,7 @@ def prepare_lerobot_runtime(
         _patch_skip_policyless_reset_loop()
     if background_episode_video_encoding:
         _patch_append_safe_episode_metadata_flush()
-        _patch_background_episode_video_encoding()
+        _patch_save_episode_metadata_and_immediate_video_encoding()
 
 
 class _CompositeListener:
@@ -250,127 +249,91 @@ def _metadata_buffer_to_pydict(metadata_buffer: list[dict], numpy_module: Any) -
 
 
 def _patch_append_safe_episode_metadata_flush() -> None:
-    import lerobot.datasets.lerobot_dataset as lerobot_dataset
+    import lerobot.datasets.dataset_metadata as dataset_metadata
 
-    metadata_cls = lerobot_dataset.LeRobotDatasetMetadata
+    metadata_cls = dataset_metadata.LeRobotDatasetMetadata
     if getattr(metadata_cls._flush_metadata_buffer, "_evo_rlt_append_safe", False):
         return
 
     original_flush_metadata_buffer = metadata_cls._flush_metadata_buffer
 
     def _flush_metadata_buffer(self) -> None:
-        if not hasattr(self, "metadata_buffer") or len(self.metadata_buffer) == 0:
+        metadata_buffer = getattr(self, "_metadata_buffer", None)
+        if not metadata_buffer:
             return
-        if self.writer is not None:
+        if getattr(self, "_pq_writer", None) is not None:
             return original_flush_metadata_buffer(self)
 
-        first_ep = self.metadata_buffer[0]
+        first_ep = metadata_buffer[0]
         chunk_idx = first_ep["meta/episodes/chunk_index"][0]
         file_idx = first_ep["meta/episodes/file_index"][0]
-        path = self.root / lerobot_dataset.DEFAULT_EPISODES_PATH.format(
+        path = self.root / dataset_metadata.DEFAULT_EPISODES_PATH.format(
             chunk_index=chunk_idx,
             file_index=file_idx,
         )
         if not Path(path).exists():
             return original_flush_metadata_buffer(self)
 
-        incoming_dict = _metadata_buffer_to_pydict(self.metadata_buffer, lerobot_dataset.np)
-        incoming_table = lerobot_dataset.pa.Table.from_pydict(incoming_dict)
-        existing_df = lerobot_dataset.pd.read_parquet(path)
+        incoming_dict = _metadata_buffer_to_pydict(metadata_buffer, dataset_metadata.np)
+        incoming_table = dataset_metadata.pa.Table.from_pydict(incoming_dict)
+        existing_df = dataset_metadata.pd.read_parquet(path)
         incoming_df = incoming_table.to_pandas()
-        combined_df = lerobot_dataset.pd.concat([existing_df, incoming_df], ignore_index=True)
+        combined_df = dataset_metadata.pd.concat([existing_df, incoming_df], ignore_index=True)
         combined_df.to_parquet(path)
-        self.latest_episode = self.metadata_buffer[-1]
-        self.metadata_buffer.clear()
+        self.latest_episode = metadata_buffer[-1]
+        metadata_buffer.clear()
 
     _flush_metadata_buffer._evo_rlt_append_safe = True
     metadata_cls._flush_metadata_buffer = _flush_metadata_buffer
 
 
-class _BackgroundEpisodeVideoEncoder:
-    def __init__(self, dataset, encode_batch):
-        self.dataset = dataset
-        self.encode_batch = encode_batch
-        self.lock = threading.Lock()
-        self.executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="evo-rlt-video",
-        )
-        self.futures: list[concurrent.futures.Future] = []
-
-    def submit(self, start_episode: int, end_episode: int) -> None:
-        future = self.executor.submit(self._encode, start_episode, end_episode)
-        self.futures.append(future)
-
-    def _encode(self, start_episode: int, end_episode: int) -> None:
-        with self.lock:
-            logging.info(
-                "Background encoding episode videos from %s to %s",
-                start_episode,
-                end_episode - 1,
-            )
-            self.encode_batch(self.dataset, start_episode, end_episode)
-            self.dataset.episodes_since_last_encoding = 0
-
-    def wait(self) -> None:
-        for future in self.futures:
-            future.result()
-        self.futures.clear()
-        self.executor.shutdown(wait=True)
-
-
-def _patch_background_episode_video_encoding() -> None:
+def _patch_save_episode_metadata_and_immediate_video_encoding() -> None:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
-    from lerobot.datasets.video_utils import VideoEncodingManager
 
-    if getattr(LeRobotDataset.save_episode, "_evo_rlt_background_video_encoding", False):
+    if getattr(LeRobotDataset.save_episode, "_evo_rlt_save_episode_patch", False):
         return
 
     original_save_episode = LeRobotDataset.save_episode
-    original_batch_save_episode_video = LeRobotDataset._batch_save_episode_video
-    original_video_encoding_manager_exit = VideoEncodingManager.__exit__
 
-    def get_encoder(dataset) -> _BackgroundEpisodeVideoEncoder:
-        encoder = getattr(dataset, "_evo_rlt_background_video_encoder", None)
-        if encoder is None:
-            encoder = _BackgroundEpisodeVideoEncoder(dataset, original_batch_save_episode_video)
-            dataset._evo_rlt_background_video_encoder = encoder
-        return encoder
+    def save_episode_with_extra_metadata(dataset, args, kwargs, extra_episode_metadata):
+        if extra_episode_metadata is None:
+            return original_save_episode(dataset, *args, **kwargs)
+
+        original_meta_save_episode = dataset.meta.save_episode
+
+        def meta_save_episode(episode_index, episode_length, episode_tasks, episode_stats, episode_metadata):
+            merged_episode_metadata = dict(episode_metadata)
+            merged_episode_metadata.update(extra_episode_metadata)
+            return original_meta_save_episode(
+                episode_index,
+                episode_length,
+                episode_tasks,
+                episode_stats,
+                merged_episode_metadata,
+            )
+
+        dataset.meta.save_episode = meta_save_episode
+        try:
+            return original_save_episode(dataset, *args, **kwargs)
+        finally:
+            dataset.meta.save_episode = original_meta_save_episode
 
     def save_episode(self, *args, **kwargs):
-        if len(getattr(self.meta, "video_keys", [])) == 0:
-            return original_save_episode(self, *args, **kwargs)
+        extra_episode_metadata = kwargs.pop("extra_episode_metadata", None)
+        writer = getattr(self, "writer", None)
+        has_videos = len(getattr(self.meta, "video_keys", [])) > 0
+        if writer is None or not has_videos:
+            return save_episode_with_extra_metadata(self, args, kwargs, extra_episode_metadata)
 
-        encoder = get_encoder(self)
-        with encoder.lock:
-            before_episode_count = self.meta.total_episodes
-            original_batch_encoding_size = self.batch_encoding_size
-            self.batch_encoding_size = max(original_batch_encoding_size, self.meta.total_episodes + 1_000_000)
-            try:
-                result = original_save_episode(self, *args, **kwargs)
-            finally:
-                self.batch_encoding_size = original_batch_encoding_size
+        original_batch_encoding_size = writer._batch_encoding_size
+        writer._batch_encoding_size = 1
+        try:
+            return save_episode_with_extra_metadata(self, args, kwargs, extra_episode_metadata)
+        finally:
+            writer._batch_encoding_size = original_batch_encoding_size
 
-            after_episode_count = self.meta.total_episodes
-            if after_episode_count > before_episode_count:
-                self.meta._close_writer()
-                self.episodes_since_last_encoding = 0
-                encoder.submit(after_episode_count - 1, after_episode_count)
-            return result
-
-    def video_encoding_manager_exit(self, exc_type, exc_val, exc_tb):
-        encoder = getattr(self.dataset, "_evo_rlt_background_video_encoder", None)
-        if encoder is not None:
-            logging.info("Waiting for background episode video encoding to finish...")
-            try:
-                encoder.wait()
-            finally:
-                self.dataset.episodes_since_last_encoding = 0
-        return original_video_encoding_manager_exit(self, exc_type, exc_val, exc_tb)
-
-    save_episode._evo_rlt_background_video_encoding = True
+    save_episode._evo_rlt_save_episode_patch = True
     LeRobotDataset.save_episode = save_episode
-    VideoEncodingManager.__exit__ = video_encoding_manager_exit
 
 
 def _validate_distinct_keys(**keys: str | None) -> None:
