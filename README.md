@@ -275,20 +275,61 @@ python -m pip install -e ".[lerobot]"
 export HF_HUB_OFFLINE=1
 ```
 
-Default VLA-RLT-VLA real-robot collection:
+Default VLA-RLT-VLA real-robot collection uses the official LeRobot `0.5.1` streaming encoder. The wrapper keeps the foreground recording loop responsive and expands the dataset settings to `--dataset.vcodec=h264`, `--dataset.video_encoding_batch_size=<num_episodes + 1>`, and `--dataset.streaming_encoding=true`.
+
+Shared collection arguments:
 
 ```bash
-evo-rlt-record collect \
+COMMON_ARGS=(
   --setup-json /path/to/robot_manifest.json \
   --policy-path /path/to/rlt_ac_policy \
   --vla-path /path/to/pi05_vla_checkpoint_or_dir \
   --rl-token-path /path/to/rl_token_policy \
   --dataset-tag vla_rlt_vla_test \
+  --num-episodes 5 \
+  --episode-time-s 3000 \
+  --fps 30 \
+  --vcodec h264 \
   --rlt-toggle-key r \
   --teleop-toggle-key space
+)
+```
+
+Start in VLA mode and record the full trajectory:
+
+```bash
+evo-rlt-record collect "${COMMON_ARGS[@]}"
+```
+
+Start in VLA mode and record only the critical segment:
+
+```bash
+evo-rlt-record collect "${COMMON_ARGS[@]}" --only-critical
+```
+
+Start in teleoperation mode and record the full trajectory:
+
+```bash
+evo-rlt-record collect "${COMMON_ARGS[@]}" --start-with-teleop
+```
+
+Start in teleoperation mode and record only the critical segment:
+
+```bash
+evo-rlt-record collect "${COMMON_ARGS[@]}" --start-with-teleop --only-critical
 ```
 
 The same collection entrypoint is exposed as `evo-rlt-collect-default` after reinstalling package entry points, but checkpoint and setup paths still need to be supplied by the caller.
+
+Validated RTC defaults for this collection mode:
+
+```text
+RLT RTC execution horizon: 10
+VLA RTC execution horizon: 25
+RTC action queue refill threshold: 30
+RTC max guidance weight: 10.0
+RTC prefix attention schedule: EXP
+```
 
 Default collection controls:
 
@@ -307,14 +348,6 @@ r+r            save the segment as failure, exit RLT mode, then end the episode
 space          toggle teleop intervention; pressing again exits teleop
 left arrow     rerecord the current episode
 Esc            stop data collection
-```
-
-Validated RTC defaults for this collection mode:
-
-```text
-RLT RTC execution horizon: 10
-VLA RTC execution horizon: 25
-RTC action queue refill threshold: 30
 ```
 
 VLA-only full-process recording with pedal outcome labels:
