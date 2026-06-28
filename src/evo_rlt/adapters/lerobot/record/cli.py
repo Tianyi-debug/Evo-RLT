@@ -69,7 +69,6 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--play-sounds", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--rlt-toggle-key", default="r")
     parser.add_argument("--teleop-toggle-key", default="space")
-    parser.add_argument("--episode-outcome-key", default="e")
     parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
     parser.add_argument(
         "--start-with-teleop",
@@ -83,8 +82,9 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
         default=False,
         help=(
             "Record only the RLT critical segment. The first RLT key press starts "
-            "recording; ending RLT saves the episode. The default records the whole "
-            "VLA/RLT/teleop trajectory until the episode outcome key is pressed."
+            "recording and enters RLT; the next RLT key press saves the segment. "
+            "The default records the full trajectory immediately and uses the RLT key "
+            "as the full-episode outcome key."
         ),
     )
     parser.add_argument("--dry-run", action="store_true", default=False)

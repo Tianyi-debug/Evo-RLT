@@ -680,7 +680,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         # RLT HIL mode: use SPACE for intervention, r/s/f for phase control
         rlt_hil_mode = cfg.rlt.enable and policy is not None and teleop is not None
         rlt_active = cfg.rlt.enable and policy is not None
-        if rlt_active:
+        rlt_key_controls_phase = (
+            cfg.rlt.rl_phase_key_toggles_episode or cfg.rlt.rl_phase_key_toggles_critical_phase
+        )
+        if rlt_active and rlt_key_controls_phase:
             rl_phase_key_binding = cfg.rlt.rl_phase_key
         elif teleop_r_key_mode:
             rl_phase_key_binding = "r"

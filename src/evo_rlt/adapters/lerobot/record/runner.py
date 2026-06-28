@@ -439,7 +439,7 @@ def _validate_distinct_keys(**keys: str | None) -> None:
 def _collect_external_episode_outcome_key(args: argparse.Namespace) -> str | None:
     if args.only_critical:
         return None
-    return args.episode_outcome_key
+    return args.rlt_toggle_key
 
 
 def _episode_outcome_argv(enabled: bool, default_episode_success: str | None = None) -> list[str]:
@@ -470,18 +470,18 @@ def _collect_rlt_phase_argv(args: argparse.Namespace) -> list[str]:
     return [
         *common,
         f"--rlt.start_in_teleop={'true' if args.start_with_teleop else 'false'}",
-        "--rlt.rl_phase_key_toggles_critical_phase=true",
     ]
 
 
 def run_collect(args: argparse.Namespace) -> None:
     set_offline_env()
     episode_outcome_key = _collect_external_episode_outcome_key(args)
-    _validate_distinct_keys(
-        rlt_toggle_key=args.rlt_toggle_key,
-        teleop_toggle_key=args.teleop_toggle_key,
-        episode_outcome_key=episode_outcome_key,
-    )
+    validation_keys = {"teleop_toggle_key": args.teleop_toggle_key}
+    if args.only_critical:
+        validation_keys["rlt_toggle_key"] = args.rlt_toggle_key
+    else:
+        validation_keys["episode_outcome_key"] = episode_outcome_key
+    _validate_distinct_keys(**validation_keys)
     setup = load_robot_setup(args.setup_json)
     paths = resolve_run_paths(setup.setup, args.dataset_tag, "eval_vla_rlt_vla")
     configure_logging(paths.log_file, args.log_level)
@@ -585,29 +585,27 @@ def print_collect_summary(args: argparse.Namespace, paths) -> None:
     )
     if args.only_critical:
         print(
-            f"Recording mode: RLT-only. {args.rlt_toggle_key} starts RLT and recording; "
-            f"{args.rlt_toggle_key} ends the episode as success; "
+            f"Recording mode: RLT critical segment only. {args.rlt_toggle_key} enters RLT and starts recording; "
+            f"the next {args.rlt_toggle_key} saves success; "
             f"{args.rlt_toggle_key}+{args.rlt_toggle_key} inside "
-            f"{args.double_tap_window_s:.1f}s marks failure."
+            f"{args.double_tap_window_s:.1f}s saves failure."
         )
     else:
         print(
             f"Recording mode: full trajectory. Recording starts immediately; "
-            f"{args.rlt_toggle_key} toggles RLT critical phase while the episode continues."
+            f"{args.rlt_toggle_key} saves success after {args.double_tap_window_s:.1f}s; "
+            f"double-tap {args.rlt_toggle_key} saves failure."
         )
     print(f"Episode starts with: {'teleop' if args.start_with_teleop else 'VLA'}")
+    if args.only_critical:
+        rlt_control = f"{args.rlt_toggle_key}=start/end RLT critical recording"
+    else:
+        rlt_control = f"{args.rlt_toggle_key}=save full-episode outcome"
     print(
         "Controls: "
-        f"{args.rlt_toggle_key}=toggle RLT, "
+        f"{rlt_control}, "
         f"{args.teleop_toggle_key}=toggle teleop intervention"
     )
-    episode_outcome_key = _collect_external_episode_outcome_key(args)
-    if episode_outcome_key is not None:
-        print(
-            "Episode outcome: "
-            f"{episode_outcome_key}=success after {args.double_tap_window_s:.1f}s; "
-            f"double-tap {episode_outcome_key}=failure"
-        )
 
 
 def run_segment(args: argparse.Namespace) -> None:

@@ -78,6 +78,18 @@ rlt_ac       # chunk actor-critic policy
 rlt          # deployment policy wrapper
 ```
 
+### LeRobot 0.5.1 Normalization
+
+Evo-RLT follows the LeRobot `>=0.5` processor-pipeline runtime:
+
+```text
+raw observation -> policy_preprocessor -> policy -> policy_postprocessor -> robot action
+```
+
+Checkpoints trained or migrated for LeRobot `>=0.5` are expected to include `policy_preprocessor.json`, `policy_postprocessor.json`, and processor weight files such as `NormalizerProcessorStep` / `UnnormalizerProcessorStep` statistics. The presence of `NormalizerProcessorStep` is normal in LeRobot `0.5.1`; it is not a legacy workaround.
+
+Only migrate normalization for checkpoints trained before LeRobot's processor-pipeline migration. For those checkpoints, verify normalization is not applied twice: model weights should not contain embedded normalization keys such as `normalize_inputs.*`, and the external pre/postprocessor stats must match the training normalization modes.
+
 <a id="hardware-setup"></a>
 
 ### 2) Hardware Setup
@@ -273,8 +285,7 @@ evo-rlt-record collect \
   --rl-token-path /path/to/rl_token_policy \
   --dataset-tag vla_rlt_vla_test \
   --rlt-toggle-key r \
-  --teleop-toggle-key space \
-  --episode-outcome-key e
+  --teleop-toggle-key space
 ```
 
 The same collection entrypoint is exposed as `evo-rlt-collect-default` after reinstalling package entry points, but checkpoint and setup paths still need to be supplied by the caller.
@@ -282,10 +293,18 @@ The same collection entrypoint is exposed as `evo-rlt-collect-default` after rei
 Default collection controls:
 
 ```text
-r              toggle RLT critical phase
+Full-trajectory mode:
+r              save the full episode as success after the double-tap window
+r+r            save the full episode as failure
 space          toggle teleop intervention; pressing again exits teleop
-e              save the episode as success after the double-tap window
-e+e            save the episode as failure
+left arrow     rerecord the current episode
+Esc            stop data collection
+
+Critical-segment mode (`--only-critical`):
+r              enter RLT mode and start recording the critical segment
+r              save the segment as success, exit RLT mode, then end the episode
+r+r            save the segment as failure, exit RLT mode, then end the episode
+space          toggle teleop intervention; pressing again exits teleop
 left arrow     rerecord the current episode
 Esc            stop data collection
 ```

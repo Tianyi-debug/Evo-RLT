@@ -8,6 +8,7 @@ import pytest
 from evo_rlt.adapters.lerobot.record.cli import build_parser
 from evo_rlt.adapters.lerobot.record import runner
 from evo_rlt.adapters.lerobot.record.runner import (
+    _collect_external_episode_outcome_key,
     _patch_double_tap_episode_outcome_listener,
     _patch_skip_policyless_reset_loop,
     build_default_collect_record_argv,
@@ -213,13 +214,19 @@ def test_default_collect_parser_uses_open_source_safe_defaults():
     assert args.num_episodes == 5
     assert args.rlt_toggle_key == "r"
     assert args.teleop_toggle_key == "space"
-    assert args.episode_outcome_key == "e"
     assert args.start_with_teleop is False
     assert args.only_critical is False
     assert args.rtc is True
     assert args.rtc_execution_horizon == 10
     assert args.vla_rtc_execution_horizon == 25
     assert args.rtc_action_queue_size_to_get_new_actions == 30
+
+
+def test_default_collect_full_mode_uses_r_key_as_episode_outcome():
+    parser = build_parser()
+    args = parser.parse_args(["collect", "--policy-path", "/tmp/ac", "--rlt-toggle-key", "r"])
+
+    assert _collect_external_episode_outcome_key(args) == "r"
 
 
 def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
@@ -243,7 +250,6 @@ def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
         play_sounds=True,
         rlt_toggle_key="r",
         teleop_toggle_key="space",
-        episode_outcome_key="e",
         default_episode_success=None,
         start_with_teleop=False,
         only_critical=False,
@@ -276,7 +282,7 @@ def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
     assert "--rlt.enable=true" in argv
     assert "--rlt.rl_phase_key=r" in argv
     assert "--rlt.start_in_teleop=false" in argv
-    assert "--rlt.rl_phase_key_toggles_critical_phase=true" in argv
+    assert "--rlt.rl_phase_key_toggles_critical_phase=true" not in argv
     assert "--rlt.rl_phase_key_toggles_episode=true" not in argv
     assert "--rlt.skip_prefix_recording=true" not in argv
     assert "--rlt.rtc_execution_horizon=10" in argv
@@ -310,7 +316,6 @@ def test_default_collect_only_critical_starts_recording_on_first_r_and_ends_on_s
         play_sounds=True,
         rlt_toggle_key="r",
         teleop_toggle_key="space",
-        episode_outcome_key="e",
         start_with_teleop=False,
         only_critical=True,
     )
@@ -359,7 +364,6 @@ def test_default_collect_start_with_teleop_sets_episode_initial_source():
         play_sounds=True,
         rlt_toggle_key="r",
         teleop_toggle_key="space",
-        episode_outcome_key="e",
         start_with_teleop=True,
         only_critical=False,
     )
@@ -379,7 +383,7 @@ def test_default_collect_start_with_teleop_sets_episode_initial_source():
     )
 
     assert "--rlt.start_in_teleop=true" in argv
-    assert "--rlt.rl_phase_key_toggles_critical_phase=true" in argv
+    assert "--rlt.rl_phase_key_toggles_critical_phase=true" not in argv
     assert "--rlt.rl_phase_key_toggles_episode=true" not in argv
 
 
@@ -516,7 +520,6 @@ def test_default_collect_argv_accepts_headless_default_episode_success():
         play_sounds=True,
         rlt_toggle_key="r",
         teleop_toggle_key="space",
-        episode_outcome_key="e",
         default_episode_success="success",
         start_with_teleop=False,
         only_critical=False,
