@@ -43,6 +43,7 @@ from evo_rlt.adapters.lerobot.record.hil import (
     ACPInferenceConfig,
     PolicySyncDualArmExecutor,
     _capture_policy_runtime_state,
+    set_teleop_manual_control as apply_teleop_manual_control,
     _predict_policy_action_with_acp_inference,
 )
 from lerobot.teleoperators import Teleoperator, koch_leader, omx_leader, so_leader
@@ -291,14 +292,8 @@ def record_loop(
         teleop_arm_for_mode_switch = teleop_arm
 
     def set_teleop_manual_control(enabled: bool) -> None:
-        if teleop_arm_for_mode_switch is None:
-            return
-        if not hasattr(teleop_arm_for_mode_switch, "set_manual_control"):
-            return
-        try:
-            teleop_arm_for_mode_switch.set_manual_control(enabled)
-        except Exception:
-            logging.exception("Failed to switch teleop manual-control mode to %s", enabled)
+        if teleop_arm_for_mode_switch is not None:
+            apply_teleop_manual_control(teleop_arm_for_mode_switch, enabled)
 
     if policy is None:
         # During reset/teleop-only loops keep leader backdrivable for manual dragging.

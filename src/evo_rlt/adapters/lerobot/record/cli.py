@@ -70,6 +70,7 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rlt-toggle-key", default="r")
     parser.add_argument("--teleop-toggle-key", default="space")
     parser.add_argument("--episode-outcome-key", default="e")
+    parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
     parser.add_argument(
         "--start-with-teleop",
         action=argparse.BooleanOptionalAction,

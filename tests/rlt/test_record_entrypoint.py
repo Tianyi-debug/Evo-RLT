@@ -235,6 +235,7 @@ def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
         rlt_toggle_key="r",
         teleop_toggle_key="space",
         episode_outcome_key="e",
+        default_episode_success=None,
         start_with_teleop=False,
         only_critical=False,
     )
@@ -422,3 +423,99 @@ def test_evo_rlt_recording_does_not_import_lerobot_fork_only_modules():
                 offenders.append(f"{py_file.relative_to(source_root)}: {banned}")
 
     assert offenders == []
+
+
+class _FakeLeaderBus:
+    def __init__(self):
+        self.calls = []
+
+    def enable_torque(self):
+        self.calls.append(("enable_torque",))
+
+    def disable_torque(self):
+        self.calls.append(("disable_torque",))
+
+    def sync_write(self, data_name, values):
+        self.calls.append(("sync_write", data_name, dict(values)))
+
+
+class _FakeLeaderArm:
+    def __init__(self):
+        self.bus = _FakeLeaderBus()
+        self.config = SimpleNamespace(port="/dev/fake")
+
+
+def test_official_so_leader_feedback_is_sent_through_bus():
+    from evo_rlt.adapters.lerobot.record.hil import send_teleop_feedback, set_teleop_manual_control
+
+    leader = _FakeLeaderArm()
+
+    send_teleop_feedback(leader, {"shoulder_pan.pos": 1.0, "ignored": 2.0})
+    send_teleop_feedback(leader, {"shoulder_lift.pos": 3.0})
+    set_teleop_manual_control(leader, True)
+
+    assert leader.bus.calls == [
+        ("enable_torque",),
+        ("sync_write", "Goal_Position", {"shoulder_pan": 1.0}),
+        ("sync_write", "Goal_Position", {"shoulder_lift": 3.0}),
+        ("disable_torque",),
+    ]
+
+
+def test_official_bi_so_leader_feedback_splits_prefixed_actions():
+    from evo_rlt.adapters.lerobot.record.hil import send_teleop_feedback
+
+    teleop = SimpleNamespace(left_arm=_FakeLeaderArm(), right_arm=_FakeLeaderArm())
+
+    send_teleop_feedback(
+        teleop,
+        {
+            "left_shoulder_pan.pos": 1.0,
+            "right_elbow_flex.pos": 2.0,
+            "action_is_pad": 0.0,
+        },
+    )
+
+    assert teleop.left_arm.bus.calls == [
+        ("enable_torque",),
+        ("sync_write", "Goal_Position", {"shoulder_pan": 1.0}),
+    ]
+    assert teleop.right_arm.bus.calls == [
+        ("enable_torque",),
+        ("sync_write", "Goal_Position", {"elbow_flex": 2.0}),
+    ]
+
+
+def test_default_collect_argv_accepts_headless_default_episode_success():
+    args = SimpleNamespace(
+        policy_path="/tmp/ac",
+        vla_path="/tmp/vla.pt",
+        rl_token_path="/tmp/rlt",
+        task="task",
+        num_episodes=1,
+        episode_time_s=10,
+        fps=30,
+        vcodec="h264",
+        double_tap_window_s=0.6,
+        rtc=True,
+        rtc_execution_horizon=10,
+        vla_rtc_execution_horizon=25,
+        rtc_max_guidance_weight=10.0,
+        rtc_prefix_attention_schedule="EXP",
+        rtc_action_queue_size_to_get_new_actions=30,
+        vla_ref=True,
+        play_sounds=True,
+        rlt_toggle_key="r",
+        teleop_toggle_key="space",
+        episode_outcome_key="e",
+        default_episode_success="success",
+        start_with_teleop=False,
+        only_critical=False,
+    )
+    setup = SimpleNamespace(followers=[{"port": "left"}, {"port": "right"}], left_cameras={}, right_cameras={})
+    paths = SimpleNamespace(dataset_name="local/test", dataset_root="/tmp/dataset")
+
+    argv = build_default_collect_record_argv(args, setup, paths, "/tmp/cal", ["--teleop.type=bi_so_leader"])
+
+    assert "--default_episode_success=success" in argv
+    assert "--require_episode_success_label=true" in argv

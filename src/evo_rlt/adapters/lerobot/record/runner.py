@@ -160,11 +160,7 @@ def _start_double_tap_keyboard_listener(
 
     if control_utils.is_headless():
         return None
-    try:
-        from pynput import keyboard
-    except ImportError as error:
-        logging.info("Episode outcome keyboard listener unavailable: %s", error)
-        return None
+    from pynput import keyboard
 
     normalized_outcome_key = _event_key_name(outcome_key)
 
@@ -176,6 +172,44 @@ def _start_double_tap_keyboard_listener(
     listener = keyboard.Listener(on_press=on_press)
     listener.start()
     return listener
+
+
+def _start_record_event_keyboard_listener(events: dict[str, Any], key_bindings: dict[str | None, str | None]):
+    import lerobot.utils.control_utils as control_utils
+
+    if control_utils.is_headless():
+        return None
+    from pynput import keyboard
+
+    event_by_key = {
+        _event_key_name(key): event_name
+        for key, event_name in key_bindings.items()
+        if _event_key_name(key) is not None and event_name is not None
+    }
+
+    def on_press(key: Any) -> None:
+        key_name = _pynput_key_name(key, keyboard)
+        event_name = event_by_key.get(key_name)
+        if event_name is not None:
+            events[event_name] = True
+
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+    return listener
+
+
+def _ensure_record_events(events: dict[str, Any]) -> None:
+    events.setdefault("episode_outcome", None)
+    for event_name in [
+        "toggle_intervention",
+        "toggle_critical_phase",
+        "cp_mark_success",
+        "cp_mark_failure",
+        "start_rl_phase",
+        "end_phase_success",
+        "end_phase_failure",
+    ]:
+        events.setdefault(event_name, False)
 
 
 def _patch_double_tap_episode_outcome_listener(
@@ -190,13 +224,36 @@ def _patch_double_tap_episode_outcome_listener(
     original_init_keyboard_listener = control_utils.init_keyboard_listener
 
     def init_keyboard_listener(*args, **kwargs):
-        kwargs["episode_success_key"] = None
-        kwargs["episode_failure_key"] = None
-        keyboard_listener, events = original_init_keyboard_listener(*args, **kwargs)
+        intervention_toggle_key = kwargs.pop("intervention_toggle_key", None)
+        critical_phase_toggle_key = kwargs.pop("critical_phase_toggle_key", None)
+        kwargs.pop("episode_success_key", None)
+        kwargs.pop("episode_failure_key", None)
+        cp_success_key = kwargs.pop("cp_success_key", None)
+        cp_failure_key = kwargs.pop("cp_failure_key", None)
+        rl_phase_key = kwargs.pop("rl_phase_key", None)
+        end_success_key = kwargs.pop("end_success_key", None)
+        end_failure_key = kwargs.pop("end_failure_key", None)
+        keyboard_listener, events = original_init_keyboard_listener()
+        _ensure_record_events(events)
         router = _DoubleTapEpisodeOutcomeRouter(events, outcome_key, double_tap_window_s)
         pedal_listener = _start_double_tap_pedal_listener(router)
         extra_keyboard_listener = _start_double_tap_keyboard_listener(outcome_key, router)
-        return _CompositeListener(keyboard_listener, pedal_listener, extra_keyboard_listener, router), events
+        record_event_listener = _start_record_event_keyboard_listener(
+            events,
+            {
+                intervention_toggle_key: "toggle_intervention",
+                critical_phase_toggle_key: "toggle_critical_phase",
+                cp_success_key: "cp_mark_success",
+                cp_failure_key: "cp_mark_failure",
+                rl_phase_key: "start_rl_phase",
+                end_success_key: "end_phase_success",
+                end_failure_key: "end_phase_failure",
+            },
+        )
+        return (
+            _CompositeListener(keyboard_listener, pedal_listener, extra_keyboard_listener, record_event_listener, router),
+            events,
+        )
 
     init_keyboard_listener._evo_rlt_double_tap_episode_outcome = True
     control_utils.init_keyboard_listener = init_keyboard_listener
@@ -353,13 +410,16 @@ def _collect_external_episode_outcome_key(args: argparse.Namespace) -> str | Non
     return args.episode_outcome_key
 
 
-def _episode_outcome_argv(enabled: bool) -> list[str]:
+def _episode_outcome_argv(enabled: bool, default_episode_success: str | None = None) -> list[str]:
     if not enabled:
         return []
-    return [
+    argv = [
         "--enable_episode_outcome_labeling=true",
         "--require_episode_success_label=true",
     ]
+    if default_episode_success is not None:
+        argv.append(f"--default_episode_success={default_episode_success}")
+    return argv
 
 
 def _collect_rlt_phase_argv(args: argparse.Namespace) -> list[str]:
@@ -465,7 +525,8 @@ def build_default_collect_record_argv(
             action_queue_size_to_get_new_actions=args.rtc_action_queue_size_to_get_new_actions,
         ),
         *_episode_outcome_argv(
-            args.only_critical or _collect_external_episode_outcome_key(args) is not None
+            args.only_critical or _collect_external_episode_outcome_key(args) is not None,
+            getattr(args, "default_episode_success", None),
         ),
         "--intervention_state_machine_enabled=true",
         f"--policy_sync_to_teleop={'true' if teleop_argv else 'false'}",

@@ -768,8 +768,13 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 intervention_action_blend_time_s=cfg.rlt.intervention_action_blend_time_s,
             )
 
+        def _current_episode_frame_count() -> int:
+            writer = getattr(dataset, "writer", None)
+            episode_buffer = getattr(writer, "episode_buffer", None)
+            return episode_buffer["size"] if episode_buffer else 0
+
         def _finish_episode_trackers() -> None:
-            ep_frames = dataset.episode_buffer["size"] if dataset.episode_buffer else 0
+            ep_frames = _current_episode_frame_count()
             if critical_phase_tracker is not None:
                 critical_phase_tracker.on_episode_end(ep_frames)
             if intervention_tracker is not None:

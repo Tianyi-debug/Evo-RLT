@@ -184,6 +184,94 @@ def _predict_policy_action_with_acp_inference(
     return action_uncond + acp_inference.cfg_beta * (action_cond - action_uncond)
 
 
+def _is_so_leader_arm(teleop: Teleoperator) -> bool:
+    bus = getattr(teleop, "bus", None)
+    return (
+        callable(getattr(bus, "sync_write", None))
+        and callable(getattr(bus, "enable_torque", None))
+        and callable(getattr(bus, "disable_torque", None))
+    )
+
+
+def _is_bi_so_leader(teleop: Teleoperator) -> bool:
+    left_arm = getattr(teleop, "left_arm", None)
+    right_arm = getattr(teleop, "right_arm", None)
+    return _is_so_leader_arm(left_arm) and _is_so_leader_arm(right_arm)
+
+
+def _raise_so_leader_connection_error(teleop: Teleoperator, operation: str, error: ConnectionError) -> None:
+    from lerobot.utils.errors import DeviceDroppedConnectionError
+
+    label = getattr(teleop, "diagnostic_label", "leader arm")
+    port = getattr(getattr(teleop, "config", None), "port", "unknown")
+    raise DeviceDroppedConnectionError(label, port, operation, error) from error
+
+
+def _set_so_leader_manual_control(teleop: Teleoperator, enabled: bool) -> None:
+    manual_control_enabled = getattr(teleop, "_evo_rlt_manual_control_enabled", True)
+    if enabled:
+        if not manual_control_enabled:
+            try:
+                teleop.bus.disable_torque()
+            except ConnectionError as error:
+                _raise_so_leader_connection_error(teleop, "enabling leader manual control", error)
+            teleop._evo_rlt_manual_control_enabled = True
+        return
+
+    if manual_control_enabled:
+        try:
+            teleop.bus.enable_torque()
+        except ConnectionError as error:
+            _raise_so_leader_connection_error(teleop, "disabling leader manual control", error)
+        teleop._evo_rlt_manual_control_enabled = False
+
+
+def set_teleop_manual_control(teleop: Teleoperator, enabled: bool) -> None:
+    set_manual_control = getattr(teleop, "set_manual_control", None)
+    if callable(set_manual_control):
+        set_manual_control(enabled)
+        return
+
+    if _is_bi_so_leader(teleop):
+        set_teleop_manual_control(teleop.left_arm, enabled)
+        set_teleop_manual_control(teleop.right_arm, enabled)
+        return
+
+    if _is_so_leader_arm(teleop):
+        _set_so_leader_manual_control(teleop, enabled)
+
+
+def _send_so_leader_feedback(teleop: Teleoperator, feedback: dict[str, float]) -> None:
+    set_teleop_manual_control(teleop, False)
+    goal_pos = {key.removesuffix(".pos"): val for key, val in feedback.items() if key.endswith(".pos")}
+    if not goal_pos:
+        return
+
+    try:
+        teleop.bus.sync_write("Goal_Position", goal_pos)
+    except ConnectionError as error:
+        _raise_so_leader_connection_error(teleop, "sending leader feedback goal position", error)
+
+
+def send_teleop_feedback(teleop: Teleoperator, feedback: RobotAction) -> None:
+    if _is_bi_so_leader(teleop):
+        left_feedback = {
+            key.removeprefix("left_"): value for key, value in feedback.items() if key.startswith("left_")
+        }
+        right_feedback = {
+            key.removeprefix("right_"): value for key, value in feedback.items() if key.startswith("right_")
+        }
+        _send_so_leader_feedback(teleop.left_arm, left_feedback)
+        _send_so_leader_feedback(teleop.right_arm, right_feedback)
+        return
+
+    if _is_so_leader_arm(teleop):
+        _send_so_leader_feedback(teleop, feedback)
+        return
+
+    teleop.send_feedback(feedback)
+
+
 class PolicySyncDualArmExecutor:
     """Broadcast one policy-derived robot action to follower + teleop arm."""
 
@@ -196,11 +284,11 @@ class PolicySyncDualArmExecutor:
     def send_action(self, action: RobotAction) -> RobotAction:
         if self._pool is None:
             sent_action = self.robot.send_action(action)
-            self.teleop.send_feedback(action)
+            send_teleop_feedback(self.teleop, action)
             return sent_action
 
         robot_future = self._pool.submit(self.robot.send_action, action)
-        teleop_future = self._pool.submit(self.teleop.send_feedback, action)
+        teleop_future = self._pool.submit(send_teleop_feedback, self.teleop, action)
         sent_action = robot_future.result()
         teleop_future.result()
         return sent_action
