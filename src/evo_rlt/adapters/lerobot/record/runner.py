@@ -52,7 +52,7 @@ def prepare_lerobot_runtime(
         _patch_skip_policyless_reset_loop()
     if background_episode_video_encoding:
         _patch_append_safe_episode_metadata_flush()
-        _patch_save_episode_metadata_and_immediate_video_encoding()
+        _patch_save_episode_extra_metadata()
 
 
 class _CompositeListener:
@@ -376,7 +376,7 @@ def _patch_append_safe_episode_metadata_flush() -> None:
     metadata_cls._flush_metadata_buffer = _flush_metadata_buffer
 
 
-def _patch_save_episode_metadata_and_immediate_video_encoding() -> None:
+def _patch_save_episode_extra_metadata() -> None:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     if getattr(LeRobotDataset.save_episode, "_evo_rlt_save_episode_patch", False):
@@ -409,17 +409,7 @@ def _patch_save_episode_metadata_and_immediate_video_encoding() -> None:
 
     def save_episode(self, *args, **kwargs):
         extra_episode_metadata = kwargs.pop("extra_episode_metadata", None)
-        writer = getattr(self, "writer", None)
-        has_videos = len(getattr(self.meta, "video_keys", [])) > 0
-        if writer is None or not has_videos:
-            return save_episode_with_extra_metadata(self, args, kwargs, extra_episode_metadata)
-
-        original_batch_encoding_size = writer._batch_encoding_size
-        writer._batch_encoding_size = 1
-        try:
-            return save_episode_with_extra_metadata(self, args, kwargs, extra_episode_metadata)
-        finally:
-            writer._batch_encoding_size = original_batch_encoding_size
+        return save_episode_with_extra_metadata(self, args, kwargs, extra_episode_metadata)
 
     save_episode._evo_rlt_save_episode_patch = True
     LeRobotDataset.save_episode = save_episode

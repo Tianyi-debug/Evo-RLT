@@ -210,6 +210,7 @@ def build_dataset_argv(
         f"--dataset.vcodec={vcodec}",
         "--dataset.push_to_hub=false",
         f"--dataset.video_encoding_batch_size={num_episodes + 1}",
+        "--dataset.streaming_encoding=true",
     ]
 
 

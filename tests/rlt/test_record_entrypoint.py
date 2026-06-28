@@ -159,7 +159,7 @@ def test_skip_policyless_reset_loop_keeps_recording_loop(monkeypatch):
     assert len(calls) == 1
 
 
-def test_save_episode_patch_forces_official_immediate_video_save(monkeypatch):
+def test_save_episode_patch_preserves_official_background_video_encoding(monkeypatch):
     calls = []
 
     class FakeMeta:
@@ -188,11 +188,11 @@ def test_save_episode_patch_forces_official_immediate_video_save(monkeypatch):
     fake_lerobot_dataset.LeRobotDataset = FakeLeRobotDataset
     monkeypatch.setitem(sys.modules, "lerobot.datasets.lerobot_dataset", fake_lerobot_dataset)
 
-    runner._patch_save_episode_metadata_and_immediate_video_encoding()
+    runner._patch_save_episode_extra_metadata()
 
     dataset = FakeLeRobotDataset()
     assert dataset.save_episode(extra_episode_metadata={"episode_success": "success"}) == "saved"
-    assert ("save", 1, {}) in calls
+    assert ("save", 6, {}) in calls
     assert ("meta", {"base": "metadata", "episode_success": "success"}) in calls
     assert dataset.writer._batch_encoding_size == 6
 
@@ -291,6 +291,7 @@ def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
     assert "--enable_episode_outcome_labeling=true" in argv
     assert "--require_episode_success_label=true" in argv
     assert "--dataset.video_encoding_batch_size=6" in argv
+    assert "--dataset.streaming_encoding=true" in argv
     assert "--policy_sync_to_teleop=true" in argv
     assert "--vla_ref=true" in argv
 
