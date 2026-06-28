@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-lerobot = ["lerobot[pi] @ git+https://github.com/huggingface/lerobot.git@v0.5.1", "safetensors>=0.4.3", "packaging>=24.0"]
+lerobot = ["lerobot[pi] @ git+https://github.com/huggingface/lerobot.git@v0.5.1", "safetensors>=0.4.3", "packaging>=24.0", "evdev>=1.7"]
 test = ["pytest>=8.1", "pytest-timeout>=2.4"]
 dev = ["evo-rlt[lerobot,test]", "ruff>=0.6"]
 

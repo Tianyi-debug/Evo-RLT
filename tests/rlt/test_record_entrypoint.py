@@ -90,9 +90,9 @@ def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
     assert "--policy.path=/tmp/ac" in argv
 
 
-def test_double_tap_episode_outcome_key_marks_success_and_failure(monkeypatch):
+def test_pedal_listener_routes_record_events_and_episode_outcome(monkeypatch):
     control_utils = pytest.importorskip("lerobot.utils.control_utils")
-    pedal_listener = pytest.importorskip("lerobot.utils.pedal_listener")
+    from evo_rlt.adapters.lerobot.record import pedal_listener
 
     captured = {}
 
@@ -114,7 +114,16 @@ def test_double_tap_episode_outcome_key_marks_success_and_failure(monkeypatch):
     monkeypatch.setattr(pedal_listener, "PedalListener", FakePedalListener)
 
     _patch_double_tap_episode_outcome_listener(0.01, "e")
-    listener, events = control_utils.init_keyboard_listener()
+    listener, events = control_utils.init_keyboard_listener(
+        intervention_toggle_key=" ",
+        rl_phase_key="r",
+    )
+
+    captured["on_press"]("space")
+    assert events["toggle_intervention"] is True
+
+    captured["on_press"]("r")
+    assert events["start_rl_phase"] is True
 
     captured["on_press"]("e")
     time.sleep(0.03)

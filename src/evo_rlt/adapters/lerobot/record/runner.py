@@ -5,6 +5,7 @@ import logging
 import runpy
 import sys
 import threading
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -139,14 +140,47 @@ class _DoubleTapEpisodeOutcomeRouter:
                 self._timer = None
 
 
-def _start_double_tap_pedal_listener(router: _DoubleTapEpisodeOutcomeRouter):
-    try:
-        from lerobot.utils.pedal_listener import PedalListener
-    except ImportError as error:
-        logging.info("Episode outcome pedal listener unavailable: %s", error)
+PEDAL_TOGGLE_COOLDOWN_S = 0.5
+
+
+def _start_record_event_pedal_listener(
+    events: dict[str, Any],
+    key_bindings: dict[str | None, str | None],
+    outcome_router: _DoubleTapEpisodeOutcomeRouter | None = None,
+):
+    from evo_rlt.adapters.lerobot.record.pedal_listener import PedalListener
+
+    event_by_key: dict[str, str] = {}
+    for key, event_name in key_bindings.items():
+        key_name = _event_key_name(key)
+        if key_name is not None and event_name is not None and key_name not in event_by_key:
+            event_by_key[key_name] = event_name
+
+    if outcome_router is None and not event_by_key:
+        logging.info("No pedal key bindings configured; pedal listener skipped")
         return None
 
-    listener = PedalListener(on_press=router.on_press)
+    cooldown_events = {"toggle_intervention", "toggle_critical_phase"}
+    last_event_times: dict[str, float] = {}
+
+    def on_press(key_name: str) -> None:
+        normalized_key = _event_key_name(key_name)
+        if normalized_key is None:
+            return
+        if outcome_router is not None:
+            outcome_router.on_press(normalized_key)
+        event_name = event_by_key.get(normalized_key)
+        if event_name is None:
+            return
+        if event_name in cooldown_events:
+            now = time.monotonic()
+            if now - last_event_times.get(event_name, 0.0) < PEDAL_TOGGLE_COOLDOWN_S:
+                return
+            last_event_times[event_name] = now
+        logging.info("Pedal '%s' pressed -> events[%s] = True", normalized_key, event_name)
+        events[event_name] = True
+
+    listener = PedalListener(on_press=on_press)
     if listener.start():
         return listener
     return None
@@ -236,20 +270,18 @@ def _patch_double_tap_episode_outcome_listener(
         keyboard_listener, events = original_init_keyboard_listener()
         _ensure_record_events(events)
         router = _DoubleTapEpisodeOutcomeRouter(events, outcome_key, double_tap_window_s)
-        pedal_listener = _start_double_tap_pedal_listener(router)
+        record_key_bindings = {
+            intervention_toggle_key: "toggle_intervention",
+            critical_phase_toggle_key: "toggle_critical_phase",
+            cp_success_key: "cp_mark_success",
+            cp_failure_key: "cp_mark_failure",
+            rl_phase_key: "start_rl_phase",
+            end_success_key: "end_phase_success",
+            end_failure_key: "end_phase_failure",
+        }
+        pedal_listener = _start_record_event_pedal_listener(events, record_key_bindings, router)
         extra_keyboard_listener = _start_double_tap_keyboard_listener(outcome_key, router)
-        record_event_listener = _start_record_event_keyboard_listener(
-            events,
-            {
-                intervention_toggle_key: "toggle_intervention",
-                critical_phase_toggle_key: "toggle_critical_phase",
-                cp_success_key: "cp_mark_success",
-                cp_failure_key: "cp_mark_failure",
-                rl_phase_key: "start_rl_phase",
-                end_success_key: "end_phase_success",
-                end_failure_key: "end_phase_failure",
-            },
-        )
+        record_event_listener = _start_record_event_keyboard_listener(events, record_key_bindings)
         return (
             _CompositeListener(keyboard_listener, pedal_listener, extra_keyboard_listener, record_event_listener, router),
             events,
