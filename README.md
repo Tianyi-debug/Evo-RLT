@@ -1,8 +1,9 @@
 <h1 align="center">Evo-RLT</h1>
 
 <p align="center">
-  <a href="https://github.com/huggingface/lerobot"><img alt="lerobot version" src="https://img.shields.io/badge/LeRobot-v0.5.1-f59e0b"/></a>
+  <a href="https://github.com/huggingface/lerobot"><img alt="lerobot version" src="https://img.shields.io/badge/LeRobot-0.5.1-f59e0b"/></a>
   <a href="https://huggingface.co/datasets/Elvinky/bi-so101-insert-screw-562ep"><img alt="training dataset" src="https://img.shields.io/static/v1?label=Dataset&message=562ep&color=22c55e"/></a>
+  <a href="https://huggingface.co/datasets/MINT-SJTU/RW-RL-Dataset"><img alt="RW-RL dataset" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-RW--RL-ffcc4d"/></a>
   <a href="https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main"><img alt="model" src="https://img.shields.io/static/v1?label=Model&message=pi0.5&color=0ea5e9"/></a>
   <a href="https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main"><img alt="checkpoint" src="https://img.shields.io/static/v1?label=Ckpt&message=Available&color=6366f1"/></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/License-Apache--2.0-ef4444"/></a>
@@ -37,8 +38,8 @@
 | [⚡ Quick Start](#quick-start) | [🧪 Training Pipeline](#training-pipeline) | [🤗 Model & Dataset](#model-dataset) |
 | [1) Installation](#installation) | [3) Finetune VLA](#finetune-vla) | [🗂️ Repository Layout](#repository-layout) |
 | [2) Hardware Setup](#hardware-setup) | [4) Train RL Token](#train-rl-token) | [✅ Development Checks](#development-checks) |
-| [🤖 Real-Robot Recording and Deployment](#real-robot-recording-and-deployment) | [5) Build Transition Cache](#build-transition-cache) | [🏫 Affiliations](#affiliations) |
-| | [6) Train Chunk Actor-Critic](#train-chunk-actor-critic) | [📖 Citation](#citation) / [📄 License](#license) |
+| [🤖 Real-Robot Recording and Deployment](#real-robot-recording-and-deployment) | [5) Build Transition Cache](#build-transition-cache) | [🧭 Future TODO](#future-todo) |
+| | [6) Train Chunk Actor-Critic](#train-chunk-actor-critic) | [💬 Community Channels](#community-channels) / [🏫 Affiliations](#affiliations) / [📄 License](#license) |
 
 <a id="quick-start"></a>
 
@@ -94,7 +95,7 @@ Only migrate normalization for checkpoints trained before LeRobot's processor-pi
 
 ### 2) Hardware Setup
 
-Use the [Evo-RL hardware setup](https://github.com/MINT-SJTU/Evo-RL#2-hardware-setup) for the shared robot bring-up steps: SO-series assembly, stable serial/camera paths, camera validation, PiPER/PiPER-X CAN setup, and basic teleoperation checks.
+Use the [Evo-RL hardware setup](https://github.com/MINT-SJTU/Evo-RL#2-hardware-setup) for the shared SO-series robot bring-up steps: assembly, stable serial/camera paths, camera validation, and basic teleoperation checks. PiPER/PiPER-X support is planned; see [Future TODO](#future-todo).
 
 This repository only differs at the recording/deployment configuration layer:
 
@@ -406,7 +407,25 @@ PYTHONPATH=src python -m compileall -q src/evo_rlt tests/rlt
 ## 🤗 Model & Dataset
 
 - Training dataset: [Elvinky/bi-so101-insert-screw-562ep](https://huggingface.co/datasets/Elvinky/bi-so101-insert-screw-562ep).
+- Real-world RL dataset: [MINT-SJTU/RW-RL-Dataset](https://huggingface.co/datasets/MINT-SJTU/RW-RL-Dataset).
 - Checkpoint repo: [Shiki42/pi05_screw_c_mix_cont15k_fp16](https://huggingface.co/Shiki42/pi05_screw_c_mix_cont15k_fp16/tree/main).
+
+<a id="future-todo"></a>
+
+## 🧭 Future TODO
+
+- PiPER/PiPER-X real-robot deployment support.
+
+<a id="community-channels"></a>
+
+## 💬 Community Channels
+
+- Email: business@evomind-tech.com
+- WeChat group QR code:
+
+<p align="center">
+  <img alt="EvoMind WeChat QR" src="./website/assets/images/rlgroup.jpg" width="220"/>
+</p>
 
 <a id="affiliations"></a>
 
