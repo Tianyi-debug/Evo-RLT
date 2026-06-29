@@ -42,7 +42,7 @@ def make_rlt_ac_pre_post_processors(
     is part of the factory protocol but ignored — the SFT stats are authoritative.
     """
     del dataset_stats
-    pi05_pre, pi05_post = load_sft_pi05_processors(config.vla_pretrained_path)
+    pi05_pre, pi05_post = load_sft_pi05_processors(config.vla_pretrained_path, config.tokenizer_path)
     bypass_pre = _BypassOnChunkTransitionPipeline(
         steps=list(pi05_pre.steps),
         name=POLICY_PREPROCESSOR_DEFAULT_NAME,

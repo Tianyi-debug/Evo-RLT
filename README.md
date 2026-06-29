@@ -170,7 +170,13 @@ Example setup manifest:
 
 ## 🧪 Training Pipeline
 
-The typical RLT workflow has four stages.
+The typical RLT workflow has four stages. Video datasets require FFmpeg shared libraries for LeRobot `0.5.1` / TorchCodec decoding:
+
+```bash
+sudo apt-get update && sudo apt-get install -y ffmpeg
+```
+
+For saved checkpoints, LeRobot `0.5.1` writes numeric checkpoint directories such as `checkpoints/000001/pretrained_model`. Use the latest numeric directory when `checkpoints/last/pretrained_model` is not present.
 
 <a id="finetune-vla"></a>
 
@@ -189,6 +195,7 @@ python -m lerobot.scripts.lerobot_train \
   --steps=30000 \
   --save_freq=5000 \
   --eval_freq=0 \
+  --tolerance_s=0.04 \
   --output_dir=outputs/vla_ft \
   --job_name=vla_ft
 ```
@@ -202,6 +209,8 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --dataset.repo_id=<HF_ORG>/<DATASET> \
   --dataset.root=<LOCAL_DATASET_ROOT> \
   --policy.type=rlt_token \
+  --policy.repo_id=<HF_ORG>/rlt_token \
+  --policy.push_to_hub=false \
   --policy.vla_pretrained_path=outputs/vla_ft/checkpoints/last/pretrained_model \
   --policy.vla_dtype=bfloat16 \
   --policy.rl_token_num_rl_tokens=1 \
@@ -212,6 +221,7 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --steps=10000 \
   --save_freq=2000 \
   --eval_freq=0 \
+  --tolerance_s=0.04 \
   --output_dir=outputs/rl_token \
   --job_name=rl_token
 ```
@@ -242,14 +252,18 @@ evo-rlt-build-transition-cache-v2 \
 
 ### 6) Train Chunk Actor-Critic
 
+`outputs/cache` must contain `chunk_transitions_train.pt`. The Evo-RLT registry detects this cache directory through `--dataset.repo_id`.
+
 ```bash
 python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerobot.scripts.lerobot_train import main; main()' \
-  --dataset.type=rlt_chunk_transition \
   --dataset.repo_id=outputs/cache \
   --policy.type=rlt_ac \
+  --policy.repo_id=<HF_ORG>/rlt_ac \
+  --policy.push_to_hub=false \
   --policy.vla_pretrained_path=outputs/vla_ft/checkpoints/last/pretrained_model \
   --policy.rl_token_pretrained_path=outputs/rl_token/checkpoints/last/pretrained_model \
   --policy.vla_dtype=bfloat16 \
+  --policy.tokenizer_path=/path/to/paligemma-3b-pt-224-snapshot \
   --policy.rl_token_num_rl_tokens=1 \
   --policy.chunk_length=10 \
   --policy.chunk_exec_steps=25 \

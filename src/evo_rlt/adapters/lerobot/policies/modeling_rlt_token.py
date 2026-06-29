@@ -206,13 +206,37 @@ class RLTokenPolicy(PreTrainedPolicy):
                 groups.append({"params": vla_params, "lr": self.config.vla_lr})
         return groups
 
+    def _forward_pi05_with_prefix(self, batch: dict[str, Tensor], reduction: str) -> tuple[Tensor, dict, Tensor]:
+        target = self._pi05.model.paligemma_with_expert
+        original_forward = target.forward
+        prefix_hidden: Tensor | None = None
+
+        def patched_forward(*args, **kwargs):
+            nonlocal prefix_hidden
+            result = original_forward(*args, **kwargs)
+            outputs, _past_key_values = result
+            prefix_output = outputs[0]
+            if prefix_output is not None:
+                prefix_hidden = prefix_output
+            return result
+
+        target.forward = patched_forward
+        try:
+            loss, info = self._pi05.forward(batch, reduction=reduction)
+        finally:
+            target.forward = original_forward
+
+        if prefix_hidden is None:
+            raise RuntimeError("PI05 forward did not produce prefix hidden states")
+        return loss, info, prefix_hidden
+
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict | None]:
         """Reconstruction loss + optional pi0.5 supervised loss."""
         if self.config.vla_ft_weight > 0:
-            loss_vla, info, prefix_hidden = self._pi05.forward_with_prefix(batch, reduction="mean")
+            loss_vla, info, prefix_hidden = self._forward_pi05_with_prefix(batch, reduction="mean")
         else:
             with torch.no_grad():
-                _, info, prefix_hidden = self._pi05.forward_with_prefix(batch, reduction="mean")
+                _, info, prefix_hidden = self._forward_pi05_with_prefix(batch, reduction="mean")
             loss_vla = torch.zeros((), device=prefix_hidden.device, dtype=torch.float32)
 
         prefix_for_rl = postprocess_prefix_tokens(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 from transformers import AutoTokenizer
@@ -15,18 +17,26 @@ from lerobot.utils.constants import (
 )
 
 
+def _read_tokenizer_path(vla_pretrained_path: str) -> str:
+    processor_path = Path(vla_pretrained_path) / f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
+    processor_config = json.loads(processor_path.read_text())
+    for step in processor_config["steps"]:
+        if step.get("registry_name") == "tokenizer_processor":
+            return step["config"]["tokenizer_name"]
+    raise ValueError(f"tokenizer_processor not found in {processor_path}")
+
+
 def load_sft_pi05_processors(
     vla_pretrained_path: str,
-    tokenizer_path: str = "google/paligemma-3b-pt-224",
+    tokenizer_path: str | None = None,
 ) -> tuple[
     PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     """Load the SFT pi05 pre/post-processor pair verbatim from disk.
 
-    The SFT JSON can hard-code ``tokenizer_name`` to an in-house path
-    (``/llm_jzm/...``) that only exists on the original training cluster.  We
-    override it so deployment can point at an explicit local tokenizer snapshot.
+    The SFT JSON is the first source of truth for tokenizer identity. Callers may
+    still pass an explicit local tokenizer snapshot to avoid network access.
     """
     if not vla_pretrained_path:
         raise ValueError(
@@ -34,6 +44,7 @@ def load_sft_pi05_processors(
             "QUANTILES stats — deploy parity depends on it."
         )
 
+    tokenizer_path = tokenizer_path or _read_tokenizer_path(vla_pretrained_path)
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     overrides = {
         "tokenizer_processor": {

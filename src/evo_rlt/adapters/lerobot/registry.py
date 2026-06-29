@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 _REGISTERED = False
@@ -15,6 +16,7 @@ def register() -> None:
     if _REGISTERED:
         return
 
+    import lerobot.datasets.factory as dataset_factory
     import lerobot.policies.factory as factory
 
     from lerobot.configs.policies import PreTrainedConfig
@@ -30,6 +32,7 @@ def register() -> None:
     original_get_policy_class = factory.get_policy_class
     original_make_policy_config = factory.make_policy_config
     original_make_pre_post_processors = factory.make_pre_post_processors
+    original_make_dataset = dataset_factory.make_dataset
 
     def get_policy_class(name: str):
         if name == "rlt_token":
@@ -66,7 +69,17 @@ def register() -> None:
             return make_rlt_ac_pre_post_processors(config=policy_cfg, dataset_stats=kwargs.get("dataset_stats"))
         return original_make_pre_post_processors(policy_cfg, *args, **kwargs)
 
+    def make_dataset(cfg):
+        repo_id = getattr(cfg.dataset, "repo_id", None)
+        cache_dir = Path(repo_id) if isinstance(repo_id, str) else None
+        if cache_dir is not None and (cache_dir / "chunk_transitions_train.pt").exists():
+            from evo_rlt.adapters.lerobot.policies.dataset_rlt_ac import ChunkTransitionDataset
+
+            return ChunkTransitionDataset(cache_dir, split="train")
+        return original_make_dataset(cfg)
+
     factory.get_policy_class = get_policy_class
     factory.make_policy_config = make_policy_config
     factory.make_pre_post_processors = make_pre_post_processors
+    dataset_factory.make_dataset = make_dataset
     _REGISTERED = True

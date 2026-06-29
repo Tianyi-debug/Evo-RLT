@@ -88,6 +88,7 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     max_action_dim: int = 32
     image_resolution: tuple[int, int] = (224, 224)
     tokenizer_max_length: int = 200
+    tokenizer_path: str | None = None
 
     @classmethod
     def ensure_registered(cls) -> None:
