@@ -355,6 +355,7 @@ VLA-only full-process recording with pedal outcome labels:
 ```bash
 evo-rlt-record full \
   --initial-source vla \
+  --setup-json <ROBOT_SETUP_JSON> \
   --policy-path <AC_OR_VLA_POLICY_PATH> \
   --vla-path <BASE_OR_FINETUNED_VLA_PT> \
   --phase-mode always_vla \
@@ -369,6 +370,9 @@ evo-rlt-record full \
   --dataset-tag vla_full_pedal \
   --no-teleop
 ```
+
+For headless SSH runs where no keyboard or pedal outcome will be provided, add
+`--default-episode-success success` or `--default-episode-success failure`.
 
 Pedal semantics in this mode:
 

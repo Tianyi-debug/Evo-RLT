@@ -24,6 +24,7 @@ def add_common_record_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset-tag", default=None)
     parser.add_argument("--vcodec", default="h264")
     parser.add_argument("--no-teleop", action="store_true", default=False)
+    parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--dry-run", action="store_true", default=False)
 

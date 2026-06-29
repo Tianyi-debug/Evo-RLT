@@ -1,3 +1,4 @@
+import json
 import sys
 import time
 from pathlib import Path
@@ -415,6 +416,54 @@ def test_full_vla_pedal_outcome_parser():
     assert args.phase_mode == "always_vla"
     assert args.chunk_exec_steps == 25
     assert args.reset_time_s == 0
+
+
+def test_full_vla_dry_run_accepts_headless_default_episode_success(tmp_path, capsys):
+    for serial in ("left", "right"):
+        cal_dir = tmp_path / "calibration" / serial
+        cal_dir.mkdir(parents=True)
+        (cal_dir / f"{serial}.json").write_text("{}")
+
+    setup_json = tmp_path / "setup.json"
+    setup_json.write_text(json.dumps({
+        "datasets": {"root": str(tmp_path / "datasets")},
+        "arms": [
+            {
+                "alias": "left_follower",
+                "type": "follower",
+                "port": "/tmp/left-port",
+                "calibration_dir": str(tmp_path / "calibration" / "left"),
+            },
+            {
+                "alias": "right_follower",
+                "type": "follower",
+                "port": "/tmp/right-port",
+                "calibration_dir": str(tmp_path / "calibration" / "right"),
+            },
+        ],
+        "cameras": [],
+    }))
+
+    parser = build_parser()
+    args = parser.parse_args([
+        "full",
+        "--initial-source",
+        "vla",
+        "--policy-path",
+        "/tmp/ac",
+        "--setup-json",
+        str(setup_json),
+        "--dataset-tag",
+        "headless_full",
+        "--no-teleop",
+        "--default-episode-success",
+        "success",
+        "--dry-run",
+    ])
+
+    runner.run_full(args)
+
+    assert "--default_episode_success=success" in capsys.readouterr().out
 
 
 def test_evo_rlt_recording_does_not_import_lerobot_fork_only_modules():
