@@ -29,6 +29,7 @@
 
 ## 📰 News
 
+- **[2026-06-29]** Released Evo-RLT.
 - **[2026-06-26]** Added training dataset and checkpoint links.
 
 ## 🧭 Table of Contents
