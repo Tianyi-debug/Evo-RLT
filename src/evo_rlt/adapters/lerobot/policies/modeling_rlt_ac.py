@@ -187,13 +187,14 @@ class ChunkACPolicy(PreTrainedPolicy):
             tx,
             gamma=self.config.gamma,
             C=self.config.chunk_length,
+            target_q_clip=self.config.target_q_clip,
         )
         soft_update(self.target_critic, self.critic, self.config.tau)
         self._critic_step += 1
 
         do_actor = (int(self._critic_step.item()) % self.config.actor_update_interval) == 0
         if do_actor:
-            a_loss = actor_loss(self.actor, self.critic, tx, beta=self.config.beta)
+            a_loss = self._actor_loss_without_critic_grads(tx)
             total = c_loss + a_loss
             info = {
                 "loss": total.detach(),
@@ -209,6 +210,16 @@ class ChunkACPolicy(PreTrainedPolicy):
             "critic_step": self._critic_step.detach().clone(),
         }
         return c_loss, info
+
+    def _actor_loss_without_critic_grads(self, tx: dict[str, Tensor]) -> Tensor:
+        critic_params = [p for p in self.critic.parameters() if p.requires_grad]
+        for p in critic_params:
+            p.requires_grad_(False)
+        try:
+            return actor_loss(self.actor, self.critic, tx, beta=self.config.beta)
+        finally:
+            for p in critic_params:
+                p.requires_grad_(True)
 
     # ------------------------------------------------------------------
     # Inference: predict_action_chunk + select_action

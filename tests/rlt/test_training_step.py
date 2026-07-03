@@ -157,3 +157,49 @@ def test_replay_buffer_integration():
 
     assert not torch.isnan(c_loss)
     assert not torch.isnan(a_loss)
+
+
+def test_lerobot_ac_actor_loss_does_not_add_critic_grads(batch):
+    from types import SimpleNamespace
+
+    from evo_rlt.adapters.lerobot.policies.modeling_rlt_ac import ChunkACPolicy
+    from evo_rlt.core.actor import ChunkActor
+    from evo_rlt.core.critic import TwinCritic
+
+    torch.manual_seed(0)
+    policy = object.__new__(ChunkACPolicy)
+    torch.nn.Module.__init__(policy)
+    policy.config = SimpleNamespace(
+        gamma=0.99,
+        chunk_length=C,
+        tau=0.005,
+        actor_update_interval=2,
+        beta=1.0,
+        target_q_clip=100.0,
+    )
+    policy.actor = ChunkActor(STATE_DIM, CHUNK_DIM, hidden_dim=32, num_layers=2)
+    policy.critic = TwinCritic(STATE_DIM, CHUNK_DIM, hidden_dim=32, num_layers=2)
+    policy.target_critic = copy.deepcopy(policy.critic)
+    policy.register_buffer("_critic_step", torch.ones((), dtype=torch.long))
+
+    lerobot_batch = dict(batch)
+    lerobot_batch["exec_chunk"] = lerobot_batch.pop("exec_chunk_flat").view(-1, C, ACTION_DIM)
+    lerobot_batch["ref_chunk"] = lerobot_batch.pop("ref_chunk_flat").view(-1, C, ACTION_DIM)
+    lerobot_batch["next_ref_chunk"] = lerobot_batch.pop("next_ref_flat").view(-1, C, ACTION_DIM)
+
+    critic_only = copy.deepcopy(policy.critic)
+    target_only = copy.deepcopy(policy.target_critic)
+    actor_only = copy.deepcopy(policy.actor)
+    c_loss = critic_loss(
+        critic_only, target_only, actor_only, batch,
+        gamma=0.99, C=C, target_q_clip=100.0,
+    )
+    c_loss.backward()
+    expected = {name: p.grad.clone() for name, p in critic_only.named_parameters()}
+
+    loss, info = policy.forward(lerobot_batch)
+    assert "loss_actor" in info
+    loss.backward()
+
+    for name, p in policy.critic.named_parameters():
+        assert torch.allclose(p.grad, expected[name], atol=1e-6, rtol=1e-5)

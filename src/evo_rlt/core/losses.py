@@ -33,6 +33,7 @@ def critic_loss(
     batch: dict[str, torch.Tensor],
     gamma: float,
     C: int,
+    target_q_clip: float | None = 100.0,
 ) -> torch.Tensor:
     """TD3-style chunk-level TD loss with correct truncated-chunk handling.
 
@@ -52,8 +53,8 @@ def critic_loss(
         mu_next, _ = actor.forward(x_next, ref_next)
         mu_next = mu_next.clamp(-1.0, 1.0)
         q_next = target_critic.min_q(x_next, mu_next)
-        # Clamp target Q to prevent bootstrapping divergence
-        q_next = q_next.clamp(-100.0, 100.0)
+        if target_q_clip is not None and target_q_clip > 0:
+            q_next = q_next.clamp(-target_q_clip, target_q_clip)
         r = discounted_chunk_return(reward_seq, gamma, actual_steps)
 
         # Bootstrap with gamma^k where k = actual steps executed

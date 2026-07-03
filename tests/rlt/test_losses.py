@@ -149,3 +149,41 @@ def test_actor_loss_matches_paper_bc_scaling():
     # The new convention equals mean-MSE * (C * D_flat).
     mean_mse = F.mse_loss(mu, ref).item()
     assert bc_reg_observed == pytest.approx(mean_mse * D_flat, rel=1e-6)
+
+
+def test_critic_loss_respects_target_q_clip():
+    class _ZeroCritic(torch.nn.Module):
+        def forward(self, state_vec, action_flat):
+            z = torch.zeros(state_vec.shape[0], 1)
+            return z, z
+
+    class _ConstantTargetCritic(torch.nn.Module):
+        def min_q(self, state_vec, action_flat):
+            return torch.full((state_vec.shape[0], 1), 1000.0)
+
+    class _ZeroActor:
+        def forward(self, state_vec, ref_flat):
+            return torch.zeros(ref_flat.shape), None
+
+    batch = {
+        "state_vec": torch.zeros(2, STATE_DIM),
+        "exec_chunk_flat": torch.zeros(2, CHUNK_DIM),
+        "ref_chunk_flat": torch.zeros(2, CHUNK_DIM),
+        "reward_seq": torch.zeros(2, C),
+        "next_state_vec": torch.zeros(2, STATE_DIM),
+        "next_ref_flat": torch.zeros(2, CHUNK_DIM),
+        "done": torch.zeros(2),
+        "actual_steps": torch.ones(2, dtype=torch.int64),
+    }
+
+    clipped = critic_loss(
+        _ZeroCritic(), _ConstantTargetCritic(), _ZeroActor(),
+        batch, gamma=1.0, C=C, target_q_clip=10.0,
+    )
+    unclipped = critic_loss(
+        _ZeroCritic(), _ConstantTargetCritic(), _ZeroActor(),
+        batch, gamma=1.0, C=C, target_q_clip=None,
+    )
+
+    assert clipped.item() == pytest.approx(200.0)
+    assert unclipped.item() == pytest.approx(2_000_000.0)
