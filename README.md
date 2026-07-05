@@ -15,10 +15,22 @@
   <strong>A LeRobot-based reproduction of <a href="https://www.pi.website/research/rlt">RLT</a>, covering RL-token learning, transition-cache generation, actor-critic training, and real-robot rollout.</strong>
 </p>
 
-<p align="center"><strong>Real-Robot Rollout Demo</strong></p>
+<p align="center"><strong>RLT Pipeline</strong></p>
 
 <p align="center">
-  <img alt="RLT real-robot rollout demo" src="./website/assets/images/rlt_rollout.gif" width="96%"/>
+  <img alt="RLT training pipeline" src="./website/assets/images/rlt_pipeline.png" width="96%"/>
+</p>
+
+<p align="center"><strong>Collect Human Demonstrations</strong></p>
+
+<p align="center">
+  <img alt="Collect human demonstrations demo" src="./website/assets/images/rlt_collect_human_demonstrations.gif" width="96%"/>
+</p>
+
+<p align="center"><strong>Policy Rollout with Human Intervention</strong></p>
+
+<p align="center">
+  <img alt="Policy rollout with human intervention demo" src="./website/assets/images/rlt_rollout_human_intervention.gif" width="96%"/>
 </p>
 
 ## 🎯 Evo-RLT Focus
