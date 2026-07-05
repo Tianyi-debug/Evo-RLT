@@ -21,6 +21,12 @@
   <img alt="RLT training pipeline" src="./website/assets/images/rlt_pipeline.png" width="96%"/>
 </p>
 
+<p align="center"><strong>Real-Robot Rollout Demo</strong></p>
+
+<p align="center">
+  <img alt="RLT real-robot rollout demo" src="./website/assets/images/rlt_rollout.gif" width="96%"/>
+</p>
+
 <p align="center"><strong>Collect Human Demonstrations</strong></p>
 
 <p align="center">
