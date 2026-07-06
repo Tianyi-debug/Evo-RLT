@@ -71,7 +71,7 @@
 Evo-RLT depends on LeRobot `v0.5.1`, which currently ships from the official GitHub tag and requires Python 3.12+.
 
 ```bash
-git clone https://github.com/Shiki42/evo-rlt.git
+git clone https://github.com/MINT-SJTU/Evo-RLT.git
 cd evo-rlt
 
 conda create -y -n evo-rlt python=3.12
