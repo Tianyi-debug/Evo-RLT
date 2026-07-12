@@ -95,6 +95,8 @@ def build_camera_configs(
         }
         if camera.get("fourcc"):
             camera_config["fourcc"] = camera["fourcc"]
+        if camera.get("backend"):
+            camera_config["backend"] = camera["backend"]
         target_name = CAMERA_RENAME.get(alias, alias)
         if single_arm:
             left_cameras[target_name] = camera_config
@@ -137,13 +139,18 @@ def remove_existing_dataset(dataset_root: Path) -> None:
 
 
 def stage_arm_calibration(arm: dict[str, Any], dst: Path) -> None:
-    serial = Path(arm["calibration_dir"]).name
-    src = Path(arm["calibration_dir"]).expanduser() / f"{serial}.json"
-    if src.exists():
-        shutil.copy2(src, dst)
-        log.info("Calibration staged: %s -> %s", src, dst)
-        return
-    log.warning("Calibration file not found: %s", src)
+    cal_dir = Path(arm["calibration_dir"]).expanduser()
+    serial = cal_dir.name
+    candidate_names = [f"{serial}.json"]
+    if arm.get("lerobot_id"):
+        candidate_names.append(f"{arm['lerobot_id']}.json")
+    for name in dict.fromkeys(candidate_names):
+        src = cal_dir / name
+        if src.exists():
+            shutil.copy2(src, dst)
+            log.info("Calibration staged: %s -> %s", src, dst)
+            return
+    log.warning("Calibration file not found under %s; tried %s", cal_dir, candidate_names)
 
 
 def _so_variant(arm: dict[str, Any]) -> str:

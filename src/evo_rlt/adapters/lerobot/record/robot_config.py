@@ -101,6 +101,8 @@ def load_robot_config_from_json(path: str | Path) -> BiSOFollowerConfig | SOFoll
             fps=cam.get("fps", 30),
             width=cam.get("width", 640),
             height=cam.get("height", 480),
+            fourcc=cam.get("fourcc"),
+            backend=cam.get("backend", "ANY"),
         )
         if follower_count == 1:
             single_cams[alias] = cam_cfg

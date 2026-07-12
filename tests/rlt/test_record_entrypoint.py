@@ -427,6 +427,40 @@ def test_single_arm_calibrations_stage_to_single_so_ids(tmp_path):
             staged_leader_dir.cleanup()
 
 
+def test_single_arm_calibrations_stage_from_lerobot_cache_layout(tmp_path):
+    follower_cache = tmp_path / "robots" / "so101_follower"
+    leader_cache = tmp_path / "teleoperators" / "so101_leader"
+    follower_cache.mkdir(parents=True)
+    leader_cache.mkdir(parents=True)
+    (follower_cache / "my_awesome_follower_arm.json").write_text("{\"follower\": true}")
+    (leader_cache / "my_awesome_leader_arm.json").write_text("{\"leader\": true}")
+
+    staged_follower_dir = tmp_path / "staged-follower"
+    staged_follower_dir.mkdir()
+    followers = [{
+        "port": "/tmp/follower-port",
+        "calibration_dir": str(follower_cache),
+        "lerobot_id": "my_awesome_follower_arm",
+    }]
+    leaders = [{
+        "port": "/tmp/leader-port",
+        "calibration_dir": str(leader_cache),
+        "lerobot_id": "my_awesome_leader_arm",
+    }]
+
+    stage_follower_calibrations(followers, str(staged_follower_dir))
+    teleop_argv = build_teleop_argv(leaders, no_teleop=False)
+    staged_leader_dir = stage_leader_calibrations(leaders, teleop_argv)
+
+    try:
+        assert (staged_follower_dir / "my_awesome_follower_arm.json").read_text() == "{\"follower\": true}"
+        assert staged_leader_dir is not None
+        assert (Path(staged_leader_dir.name) / "my_awesome_leader_arm.json").read_text() == "{\"leader\": true}"
+    finally:
+        if staged_leader_dir is not None:
+            staged_leader_dir.cleanup()
+
+
 def test_default_collect_only_critical_starts_recording_on_first_r_and_ends_on_second_r():
     args = SimpleNamespace(
         policy_path="/tmp/ac",
