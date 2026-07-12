@@ -120,11 +120,62 @@ This repository only differs at the recording/deployment configuration layer:
 
 - `evo-rlt-record` reads a setup manifest from `--setup-json`, or from `~/.roboclaw/workspace/embodied/manifest.json` when the flag is omitted.
 - Arm entries point to per-device `calibration_dir` folders. The wrapper looks for `<calibration_dir>/<folder-name>.json`, then stages those files into temporary LeRobot-compatible names at runtime.
-- Follower calibrations are staged as `bimanual_left.json` and `bimanual_right.json` under a temporary robot calibration directory.
-- Leader calibrations are staged as `bimanual_leader_left.json` and `bimanual_leader_right.json` under a temporary teleop calibration directory.
+- A manifest may describe either one SO follower arm or a dual-arm SO setup.
+  Single-arm manifests use LeRobot `so101_follower` / `so101_leader` by default;
+  add `"model": "so100"` to an arm entry if you need SO100 CLI types.
+- Single-arm follower and leader calibrations are staged as `so101_follower.json`
+  and `so101_leader.json` by default.
+- Dual-arm follower calibrations are staged as `bimanual_left.json` and
+  `bimanual_right.json` under a temporary robot calibration directory.
+- Dual-arm leader calibrations are staged as `bimanual_leader_left.json` and
+  `bimanual_leader_right.json` under a temporary teleop calibration directory.
 - Dataset paths are created under `<datasets.root>/<MMDD>_<dataset-tag>/<prefix>_<HHMMSS>`. If `datasets.root` is omitted, the default is `~/.roboclaw/workspace/embodied/datasets`.
 
-Example setup manifest:
+Example single-arm setup manifest:
+
+```json
+{
+  "datasets": {"root": "/path/to/lerobot_datasets"},
+  "arms": [
+    {
+      "alias": "solo_follower",
+      "type": "follower",
+      "port": "/dev/serial/by-id/<follower>",
+      "calibration_dir": "/path/to/calibration/<follower-serial>"
+    },
+    {
+      "alias": "solo_leader",
+      "type": "leader",
+      "port": "/dev/serial/by-id/<leader>",
+      "calibration_dir": "/path/to/calibration/<leader-serial>"
+    }
+  ],
+  "cameras": [
+    {
+      "alias": "wrist",
+      "port": "/dev/v4l/by-path/<wrist-camera>",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    },
+    {
+      "alias": "front",
+      "port": "/dev/v4l/by-path/<front-camera>",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG"
+    }
+  ]
+}
+```
+
+If you only need policy rollout without leader-arm teleoperation, omit the leader
+entry and pass `--no-teleop` to compatible modes. Default `collect` requires a
+leader arm because it is built for human intervention.
+
+Example dual-arm setup manifest:
 
 ```json
 {

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.robots.bi_so_follower.config_bi_so_follower import BiSOFollowerConfig
-from lerobot.robots.so_follower.config_so_follower import SOFollowerConfig
+from lerobot.robots.so_follower.config_so_follower import SOFollowerConfig, SOFollowerRobotConfig
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,13 @@ def _find_arm_port(arms: list[dict], side: str) -> str:
     )
 
 
+def _find_single_follower_port(arms: list[dict]) -> str:
+    followers = [arm for arm in arms if "follower" in arm.get("type", "").lower()]
+    if len(followers) != 1:
+        raise ValueError(f"Expected exactly 1 follower arm, got {len(followers)}")
+    return followers[0]["port"]
+
+
 def _assign_camera_to_arm(
     alias: str,
     cam_cfg: OpenCVCameraConfig,
@@ -64,14 +71,14 @@ def _assign_camera_to_arm(
     right_cams[alias] = cam_cfg
 
 
-def load_robot_config_from_json(path: str | Path) -> BiSOFollowerConfig:
-    """Load a BiSOFollowerConfig from a roboclaw-compatible setup.json.
+def load_robot_config_from_json(path: str | Path) -> BiSOFollowerConfig | SOFollowerRobotConfig:
+    """Load an SO follower config from a roboclaw-compatible setup.json.
 
     Args:
         path: Path to the JSON config file.
 
     Returns:
-        A fully populated `BiSOFollowerConfig`.
+        A fully populated `BiSOFollowerConfig` or `SOFollowerRobotConfig`.
     """
     path = Path(path)
     with open(path) as f:
@@ -81,11 +88,11 @@ def load_robot_config_from_json(path: str | Path) -> BiSOFollowerConfig:
     cameras = data.get("cameras", [])
     robot_id = data.get("robot_id", data.get("id"))
 
-    left_port = _find_arm_port(arms, "left")
-    right_port = _find_arm_port(arms, "right")
+    follower_count = sum(1 for arm in arms if "follower" in arm.get("type", "").lower())
 
     left_cams: dict[str, OpenCVCameraConfig] = {}
     right_cams: dict[str, OpenCVCameraConfig] = {}
+    single_cams: dict[str, OpenCVCameraConfig] = {}
 
     for cam in cameras:
         alias = cam["alias"]
@@ -95,7 +102,25 @@ def load_robot_config_from_json(path: str | Path) -> BiSOFollowerConfig:
             width=cam.get("width", 640),
             height=cam.get("height", 480),
         )
-        _assign_camera_to_arm(alias, cam_cfg, left_cams, right_cams)
+        if follower_count == 1:
+            single_cams[alias] = cam_cfg
+        else:
+            _assign_camera_to_arm(alias, cam_cfg, left_cams, right_cams)
+
+    if follower_count == 1:
+        port = _find_single_follower_port(arms)
+        logger.info(
+            "Loaded single-arm robot config from %s: port=%s (%d cams)",
+            path, port, len(single_cams),
+        )
+        return SOFollowerRobotConfig(
+            id=robot_id,
+            port=port,
+            cameras=single_cams,
+        )
+
+    left_port = _find_arm_port(arms, "left")
+    right_port = _find_arm_port(arms, "right")
 
     logger.info(
         "Loaded robot config from %s: left_port=%s (%d cams), right_port=%s (%d cams)",

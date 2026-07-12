@@ -44,6 +44,7 @@ CAMERA_RENAME = {"left_wrist": "wrist", "right_wrist": "wrist", "right_front": "
 LEFT_CAMERA_ALIASES = {"left_wrist"}
 RIGHT_CAMERA_ALIASES = {"right_wrist", "right_front"}
 TELEOP_ID = "bimanual_leader"
+DEFAULT_SO_VARIANT = "so101"
 
 
 @dataclass(frozen=True)
@@ -67,13 +68,20 @@ def load_robot_setup(setup_json: str | None) -> RobotSetup:
     setup = load_setup_json(setup_json)
     followers = get_sorted_followers(setup)
     leaders = get_sorted_leaders(setup)
-    if len(followers) < 2:
-        raise ValueError(f"Need at least 2 follower arms, got {len(followers)}")
-    left_cameras, right_cameras = build_camera_configs(setup.get("cameras", []))
+    if not followers:
+        raise ValueError("Need at least 1 follower arm, got 0")
+    left_cameras, right_cameras = build_camera_configs(
+        setup.get("cameras", []),
+        single_arm=len(followers) == 1,
+    )
     return RobotSetup(setup, followers, leaders, left_cameras, right_cameras)
 
 
-def build_camera_configs(cameras: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+def build_camera_configs(
+    cameras: list[dict[str, Any]],
+    *,
+    single_arm: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     left_cameras: dict[str, Any] = {}
     right_cameras: dict[str, Any] = {}
     for camera in cameras:
@@ -88,7 +96,9 @@ def build_camera_configs(cameras: list[dict[str, Any]]) -> tuple[dict[str, Any],
         if camera.get("fourcc"):
             camera_config["fourcc"] = camera["fourcc"]
         target_name = CAMERA_RENAME.get(alias, alias)
-        if alias in LEFT_CAMERA_ALIASES:
+        if single_arm:
+            left_cameras[target_name] = camera_config
+        elif alias in LEFT_CAMERA_ALIASES:
             left_cameras[target_name] = camera_config
         elif alias in RIGHT_CAMERA_ALIASES:
             right_cameras[target_name] = camera_config
@@ -136,7 +146,41 @@ def stage_arm_calibration(arm: dict[str, Any], dst: Path) -> None:
     log.warning("Calibration file not found: %s", src)
 
 
+def _so_variant(arm: dict[str, Any]) -> str:
+    for key in ("robot_type", "teleop_type", "model", "variant", "type", "alias"):
+        value = str(arm.get(key, "")).lower()
+        if "so100" in value:
+            return "so100"
+        if "so101" in value:
+            return "so101"
+    return DEFAULT_SO_VARIANT
+
+
+def _single_follower_type(arm: dict[str, Any]) -> str:
+    return f"{_so_variant(arm)}_follower"
+
+
+def _single_leader_type(arm: dict[str, Any]) -> str:
+    return f"{_so_variant(arm)}_leader"
+
+
+def _single_device_id(arm: dict[str, Any], role: str) -> str:
+    if arm.get("lerobot_id"):
+        return str(arm["lerobot_id"])
+    if role == "follower":
+        return _single_follower_type(arm)
+    if role == "leader":
+        return _single_leader_type(arm)
+    raise ValueError(f"Unknown single device role: {role}")
+
+
 def stage_follower_calibrations(followers: list[dict[str, Any]], cal_dir: str) -> None:
+    if len(followers) == 1:
+        stage_arm_calibration(
+            followers[0],
+            Path(cal_dir) / f"{_single_device_id(followers[0], 'follower')}.json",
+        )
+        return
     for side, arm in (("left", followers[0]), ("right", followers[1])):
         stage_arm_calibration(arm, Path(cal_dir) / f"bimanual_{side}.json")
 
@@ -145,9 +189,18 @@ def build_teleop_argv(leaders: list[dict[str, Any]], no_teleop: bool) -> list[st
     if no_teleop:
         log.warning("Teleop disabled by --no-teleop")
         return []
-    if len(leaders) < 2:
-        log.warning("Teleop disabled: need 2 leader arms, got %d", len(leaders))
+    if not leaders:
+        log.warning("Teleop disabled: need at least 1 leader arm, got 0")
         return []
+    if len(leaders) == 1:
+        leader = leaders[0]
+        log.info("Single-arm teleop enabled: port=%s", leader["port"])
+        return [
+            f"--teleop.type={_single_leader_type(leader)}",
+            f"--teleop.port={leader['port']}",
+            "--teleop.use_degrees=true",
+            f"--teleop.id={_single_device_id(leader, 'leader')}",
+        ]
     log.info("Teleop enabled: left=%s, right=%s", leaders[0]["port"], leaders[1]["port"])
     return [
         "--teleop.type=bi_so_leader",
@@ -165,6 +218,13 @@ def stage_leader_calibrations(
     if not teleop_argv:
         return None
     leader_cal_dir = TemporaryDirectory(prefix="record-leader-cal-")
+    if len(leaders) == 1:
+        stage_arm_calibration(
+            leaders[0],
+            Path(leader_cal_dir.name) / f"{_single_device_id(leaders[0], 'leader')}.json",
+        )
+        teleop_argv.append(f"--teleop.calibration_dir={leader_cal_dir.name}")
+        return leader_cal_dir
     for side, arm in (("left", leaders[0]), ("right", leaders[1])):
         stage_arm_calibration(arm, Path(leader_cal_dir.name) / f"{TELEOP_ID}_{side}.json")
     teleop_argv.append(f"--teleop.calibration_dir={leader_cal_dir.name}")
@@ -177,6 +237,17 @@ def build_robot_argv(
     right_cameras: dict[str, Any],
     cal_dir: str,
 ) -> list[str]:
+    if len(followers) == 1:
+        follower = followers[0]
+        cameras = {**left_cameras, **right_cameras}
+        return [
+            f"--robot.type={_single_follower_type(follower)}",
+            f"--robot.id={_single_device_id(follower, 'follower')}",
+            f"--robot.calibration_dir={cal_dir}",
+            f"--robot.port={follower['port']}",
+            "--robot.use_degrees=true",
+            f"--robot.cameras={json.dumps(cameras)}",
+        ]
     return [
         "--robot.type=bi_so_follower",
         "--robot.id=bimanual",
@@ -268,9 +339,9 @@ def preflight_motor_connections(
     leader_cal_dir: str | None,
 ) -> None:
     from lerobot.robots.bi_so_follower import BiSOFollower, BiSOFollowerConfig
-    from lerobot.robots.so_follower import SOFollowerConfig
+    from lerobot.robots.so_follower import SOFollower, SOFollowerConfig, SOFollowerRobotConfig
     from lerobot.teleoperators.bi_so_leader import BiSOLeader, BiSOLeaderConfig
-    from lerobot.teleoperators.so_leader import SOLeaderConfig
+    from lerobot.teleoperators.so_leader import SOLeader, SOLeaderConfig, SOLeaderTeleopConfig
 
     def disconnect(device: Any) -> None:
         for arm_name in ("left_arm", "right_arm"):
@@ -281,14 +352,24 @@ def preflight_motor_connections(
             device.disconnect()
 
     log.info("Preflight checking follower motor connections before loading policy")
-    robot = BiSOFollower(
-        BiSOFollowerConfig(
-            id="bimanual",
-            calibration_dir=Path(cal_dir),
-            left_arm_config=SOFollowerConfig(port=followers[0]["port"], use_degrees=True),
-            right_arm_config=SOFollowerConfig(port=followers[1]["port"], use_degrees=True),
+    if len(followers) == 1:
+        robot = SOFollower(
+            SOFollowerRobotConfig(
+                id=_single_device_id(followers[0], "follower"),
+                calibration_dir=Path(cal_dir),
+                port=followers[0]["port"],
+                use_degrees=True,
+            )
         )
-    )
+    else:
+        robot = BiSOFollower(
+            BiSOFollowerConfig(
+                id="bimanual",
+                calibration_dir=Path(cal_dir),
+                left_arm_config=SOFollowerConfig(port=followers[0]["port"], use_degrees=True),
+                right_arm_config=SOFollowerConfig(port=followers[1]["port"], use_degrees=True),
+            )
+        )
     try:
         robot.connect(calibrate=True)
         log.info("Preflight follower motor check passed")
@@ -299,14 +380,24 @@ def preflight_motor_connections(
         return
 
     log.info("Preflight checking leader motor connections before loading policy")
-    teleop = BiSOLeader(
-        BiSOLeaderConfig(
-            id=TELEOP_ID,
-            calibration_dir=Path(leader_cal_dir),
-            left_arm_config=SOLeaderConfig(port=leaders[0]["port"], use_degrees=True),
-            right_arm_config=SOLeaderConfig(port=leaders[1]["port"], use_degrees=True),
+    if len(leaders) == 1:
+        teleop = SOLeader(
+            SOLeaderTeleopConfig(
+                id=_single_device_id(leaders[0], "leader"),
+                calibration_dir=Path(leader_cal_dir),
+                port=leaders[0]["port"],
+                use_degrees=True,
+            )
         )
-    )
+    else:
+        teleop = BiSOLeader(
+            BiSOLeaderConfig(
+                id=TELEOP_ID,
+                calibration_dir=Path(leader_cal_dir),
+                left_arm_config=SOLeaderConfig(port=leaders[0]["port"], use_degrees=True),
+                right_arm_config=SOLeaderConfig(port=leaders[1]["port"], use_degrees=True),
+            )
+        )
     try:
         teleop.connect(calibrate=True)
         log.info("Preflight leader motor check passed")

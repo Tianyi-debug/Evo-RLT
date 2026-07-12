@@ -7,6 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from evo_rlt.adapters.lerobot.record.cli import build_parser
+from evo_rlt.adapters.lerobot.record.common import (
+    build_teleop_argv,
+    load_robot_setup,
+    stage_follower_calibrations,
+    stage_leader_calibrations,
+)
 from evo_rlt.adapters.lerobot.record import runner
 from evo_rlt.adapters.lerobot.record.runner import (
     _collect_external_episode_outcome_key,
@@ -297,6 +303,130 @@ def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
     assert "--vla_ref=true" in argv
 
 
+def test_single_arm_setup_manifest_is_accepted_and_keeps_all_cameras(tmp_path):
+    cal_dir = tmp_path / "calibration" / "solo_follower"
+    cal_dir.mkdir(parents=True)
+    (cal_dir / "solo_follower.json").write_text("{}")
+
+    setup_json = tmp_path / "setup.json"
+    setup_json.write_text(json.dumps({
+        "datasets": {"root": str(tmp_path / "datasets")},
+        "arms": [
+            {
+                "alias": "solo_follower",
+                "type": "follower",
+                "port": "/tmp/follower-port",
+                "calibration_dir": str(cal_dir),
+            }
+        ],
+        "cameras": [
+            {
+                "alias": "wrist",
+                "port": "/tmp/wrist-camera",
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+                "fourcc": "MJPG",
+            },
+            {
+                "alias": "front",
+                "port": "/tmp/front-camera",
+                "width": 640,
+                "height": 480,
+                "fps": 30,
+            },
+        ],
+    }))
+
+    setup = load_robot_setup(str(setup_json))
+
+    assert len(setup.followers) == 1
+    assert setup.followers[0]["port"] == "/tmp/follower-port"
+    assert set(setup.left_cameras) == {"wrist", "front"}
+    assert setup.right_cameras == {}
+
+
+def test_single_arm_collect_argv_uses_so101_follower_and_leader():
+    args = SimpleNamespace(
+        policy_path="/tmp/ac",
+        vla_path="/tmp/vla.pt",
+        rl_token_path="/tmp/rlt",
+        task="task",
+        num_episodes=5,
+        episode_time_s=3000,
+        fps=30,
+        vcodec="h264",
+        double_tap_window_s=0.6,
+        rtc=True,
+        rtc_execution_horizon=10,
+        vla_rtc_execution_horizon=25,
+        rtc_max_guidance_weight=10.0,
+        rtc_prefix_attention_schedule="EXP",
+        rtc_action_queue_size_to_get_new_actions=30,
+        vla_ref=True,
+        play_sounds=True,
+        rlt_toggle_key="r",
+        teleop_toggle_key="space",
+        default_episode_success=None,
+        start_with_teleop=False,
+        only_critical=False,
+    )
+    setup = SimpleNamespace(
+        followers=[{"port": "/tmp/follower-port"}],
+        left_cameras={"wrist": {"type": "opencv", "index_or_path": "/tmp/wrist-camera"}},
+        right_cameras={},
+    )
+    paths = SimpleNamespace(dataset_name="local/eval_vla_rlt_vla_123456", dataset_root="/tmp/dataset")
+    teleop_argv = build_teleop_argv([{"port": "/tmp/leader-port"}], no_teleop=False)
+
+    argv = build_default_collect_record_argv(
+        args=args,
+        setup=setup,
+        paths=paths,
+        cal_dir="/tmp/cal",
+        teleop_argv=teleop_argv,
+    )
+
+    assert "--robot.type=so101_follower" in argv
+    assert "--robot.id=so101_follower" in argv
+    assert "--robot.port=/tmp/follower-port" in argv
+    assert (
+        "--robot.cameras={\"wrist\": {\"type\": \"opencv\", "
+        "\"index_or_path\": \"/tmp/wrist-camera\"}}"
+    ) in argv
+    assert "--teleop.type=so101_leader" in argv
+    assert "--teleop.id=so101_leader" in argv
+    assert "--teleop.port=/tmp/leader-port" in argv
+    assert "--policy_sync_to_teleop=true" in argv
+
+
+def test_single_arm_calibrations_stage_to_single_so_ids(tmp_path):
+    follower_cal_dir = tmp_path / "calibration" / "follower_serial"
+    leader_cal_dir = tmp_path / "calibration" / "leader_serial"
+    follower_cal_dir.mkdir(parents=True)
+    leader_cal_dir.mkdir(parents=True)
+    (follower_cal_dir / "follower_serial.json").write_text("{\"follower\": true}")
+    (leader_cal_dir / "leader_serial.json").write_text("{\"leader\": true}")
+
+    staged_follower_dir = tmp_path / "staged-follower"
+    staged_follower_dir.mkdir()
+    followers = [{"port": "/tmp/follower-port", "calibration_dir": str(follower_cal_dir)}]
+    leaders = [{"port": "/tmp/leader-port", "calibration_dir": str(leader_cal_dir)}]
+
+    stage_follower_calibrations(followers, str(staged_follower_dir))
+    teleop_argv = build_teleop_argv(leaders, no_teleop=False)
+    staged_leader_dir = stage_leader_calibrations(leaders, teleop_argv)
+
+    try:
+        assert (staged_follower_dir / "so101_follower.json").read_text() == "{\"follower\": true}"
+        assert staged_leader_dir is not None
+        assert (Path(staged_leader_dir.name) / "so101_leader.json").read_text() == "{\"leader\": true}"
+        assert f"--teleop.calibration_dir={staged_leader_dir.name}" in teleop_argv
+    finally:
+        if staged_leader_dir is not None:
+            staged_leader_dir.cleanup()
+
+
 def test_default_collect_only_critical_starts_recording_on_first_r_and_ends_on_second_r():
     args = SimpleNamespace(
         policy_path="/tmp/ac",
@@ -574,7 +704,11 @@ def test_default_collect_argv_accepts_headless_default_episode_success():
         start_with_teleop=False,
         only_critical=False,
     )
-    setup = SimpleNamespace(followers=[{"port": "left"}, {"port": "right"}], left_cameras={}, right_cameras={})
+    setup = SimpleNamespace(
+        followers=[{"port": "left"}, {"port": "right"}],
+        left_cameras={},
+        right_cameras={},
+    )
     paths = SimpleNamespace(dataset_name="local/test", dataset_root="/tmp/dataset")
 
     argv = build_default_collect_record_argv(args, setup, paths, "/tmp/cal", ["--teleop.type=bi_so_leader"])
