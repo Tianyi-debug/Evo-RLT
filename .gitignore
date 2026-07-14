@@ -8,5 +8,9 @@ build/
 dist/
 *.egg-info/
 outputs/
+output/
+meta/
 cache/
 wandb/
+logs/
+.vscode/
