@@ -768,6 +768,10 @@ def _episode_outcome_argv(enabled: bool, default_episode_success: str | None = N
     return argv
 
 
+def _policy_dataset_prefix(base: str, policy_path: str | None) -> str:
+    return f"eval_{base}" if policy_path is not None else base
+
+
 def _collect_rlt_phase_argv(args: argparse.Namespace) -> list[str]:
     common = [
         "--rlt.enable=true",
@@ -1056,7 +1060,8 @@ def print_segment_summary(args: argparse.Namespace, paths) -> None:
 def run_full(args: argparse.Namespace) -> None:
     set_offline_env()
     setup = load_robot_setup(args.setup_json)
-    paths = resolve_run_paths(setup.setup, args.dataset_tag, f"eval_{args.initial_source}_full")
+    dataset_prefix = _policy_dataset_prefix(f"{args.initial_source}_full", args.policy_path)
+    paths = resolve_run_paths(setup.setup, args.dataset_tag, dataset_prefix)
     configure_logging(paths.log_file, args.log_level)
     remove_existing_dataset(paths.dataset_root)
     teleop_argv = build_teleop_argv(setup.leaders, args.no_teleop)

@@ -17,6 +17,7 @@ from evo_rlt.adapters.lerobot.record import runner
 from evo_rlt.adapters.lerobot.record.runner import (
     _collect_external_episode_outcome_key,
     _patch_double_tap_episode_outcome_listener,
+    _policy_dataset_prefix,
     _patch_skip_policyless_reset_loop,
     build_default_collect_record_argv,
     build_segment_record_argv,
@@ -47,6 +48,11 @@ def test_segment_defaults_to_rtc_enabled():
         "/tmp/ac",
     ])
     assert args.rtc is True
+
+
+def test_full_teleop_without_policy_does_not_use_eval_dataset_prefix():
+    assert _policy_dataset_prefix("teleop_full", None) == "teleop_full"
+    assert _policy_dataset_prefix("vla_full", "/tmp/policy") == "eval_vla_full"
 
 
 def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
