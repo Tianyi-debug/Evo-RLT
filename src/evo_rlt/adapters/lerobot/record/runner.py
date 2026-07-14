@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import runpy
+import select
 import sys
+import termios
 import threading
 import time
+import tty
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -38,6 +42,7 @@ def prepare_lerobot_runtime(
     skip_policyless_reset_loop: bool = False,
     background_episode_video_encoding: bool = False,
 ) -> None:
+    _patch_keyboard_backend_selection()
     if double_tap_episode_outcome_key is not None:
         if double_tap_episode_outcome_window_s is None:
             raise ValueError("double_tap_episode_outcome_window_s is required")
@@ -85,6 +90,16 @@ def _pynput_key_name(key: Any, keyboard_module: Any) -> str | None:
         return "space"
     if key == keyboard_module.Key.enter:
         return "enter"
+    if key == keyboard_module.Key.right:
+        return "right"
+    if key == keyboard_module.Key.left:
+        return "left"
+    if key == keyboard_module.Key.up:
+        return "up"
+    if key == keyboard_module.Key.down:
+        return "down"
+    if key == keyboard_module.Key.esc:
+        return "esc"
     if hasattr(key, "char") and key.char:
         return key.char.lower()
     return None
@@ -233,6 +248,9 @@ def _start_record_event_keyboard_listener(events: dict[str, Any], key_bindings: 
 
 
 def _ensure_record_events(events: dict[str, Any]) -> None:
+    events.setdefault("exit_early", False)
+    events.setdefault("rerecord_episode", False)
+    events.setdefault("stop_recording", False)
     events.setdefault("episode_outcome", None)
     for event_name in [
         "toggle_intervention",
@@ -244,6 +262,295 @@ def _ensure_record_events(events: dict[str, Any]) -> None:
         "end_phase_failure",
     ]:
         events.setdefault(event_name, False)
+
+
+KEYBOARD_TOGGLE_COOLDOWN_S = 0.5
+
+
+def _get_keyboard_backend_preference() -> str:
+    backend = os.environ.get("LEROBOT_KEYBOARD_BACKEND", "auto").strip().lower()
+    if backend not in {"auto", "pynput", "tty"}:
+        logging.warning(
+            "Unknown LEROBOT_KEYBOARD_BACKEND=%r. Falling back to automatic keyboard backend selection.",
+            backend,
+        )
+        return "auto"
+    return backend
+
+
+def _should_prefer_tty_keyboard(backend: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    if backend == "tty":
+        return True
+    if backend == "pynput":
+        return False
+    return any(os.environ.get(name) for name in ("SSH_CONNECTION", "SSH_TTY", "TMUX"))
+
+
+def _build_keyboard_event_bindings(
+    *,
+    intervention_toggle_key: str | None = "i",
+    critical_phase_toggle_key: str | None = None,
+    episode_success_key: str | None = None,
+    episode_failure_key: str | None = None,
+    cp_success_key: str | None = None,
+    cp_failure_key: str | None = None,
+    rl_phase_key: str | None = None,
+    end_success_key: str | None = None,
+    end_failure_key: str | None = None,
+    extra_bindings: dict[str | None, str | None] | None = None,
+) -> dict[str, str]:
+    raw_bindings: dict[str | None, str | None] = {
+        intervention_toggle_key: "toggle_intervention",
+        critical_phase_toggle_key: "toggle_critical_phase",
+        episode_success_key: "episode_success",
+        episode_failure_key: "episode_failure",
+        cp_success_key: "cp_mark_success",
+        cp_failure_key: "cp_mark_failure",
+        rl_phase_key: "start_rl_phase",
+        end_success_key: "end_phase_success",
+        end_failure_key: "end_phase_failure",
+    }
+    if extra_bindings:
+        raw_bindings.update(extra_bindings)
+
+    event_by_key: dict[str, str] = {}
+    for key, event_name in raw_bindings.items():
+        key_name = _event_key_name(key)
+        if key_name is not None and event_name is not None:
+            event_by_key[key_name] = event_name
+    return event_by_key
+
+
+def _dispatch_keyboard_event(
+    events: dict[str, Any],
+    key_name: str,
+    event_by_key: dict[str, str],
+    last_event_times: dict[str, float],
+    outcome_router: _DoubleTapEpisodeOutcomeRouter | None = None,
+) -> None:
+    normalized_key = _event_key_name(key_name)
+    if normalized_key is None:
+        return
+
+    if normalized_key == "right":
+        print("Right arrow key pressed. Exiting loop...")
+        events["exit_early"] = True
+        return
+    if normalized_key == "left":
+        print("Left arrow key pressed. Exiting loop and rerecord the last episode...")
+        events["rerecord_episode"] = True
+        events["exit_early"] = True
+        return
+    if normalized_key == "esc":
+        print("Escape key pressed. Stopping data recording...")
+        events["stop_recording"] = True
+        events["exit_early"] = True
+        return
+
+    if outcome_router is not None:
+        outcome_router.on_press(normalized_key)
+
+    event_name = event_by_key.get(normalized_key)
+    if event_name is None:
+        return
+
+    if event_name in {"toggle_intervention", "toggle_critical_phase"}:
+        now = time.monotonic()
+        if now - last_event_times.get(event_name, 0.0) < KEYBOARD_TOGGLE_COOLDOWN_S:
+            return
+        last_event_times[event_name] = now
+
+    if event_name == "episode_success":
+        print(f"'{normalized_key}' key pressed. Marking episode as success and exiting loop...")
+        events["episode_outcome"] = "success"
+        events["exit_early"] = True
+        return
+    if event_name == "episode_failure":
+        print(f"'{normalized_key}' key pressed. Marking episode as failure and exiting loop...")
+        events["episode_outcome"] = "failure"
+        events["exit_early"] = True
+        return
+
+    logging.info("Keyboard '%s' pressed -> events[%s] = True", normalized_key, event_name)
+    events[event_name] = True
+
+
+class _EvoRLTTerminalKeyboardListener:
+    def __init__(
+        self,
+        events: dict[str, Any],
+        event_by_key: dict[str, str],
+        outcome_router: _DoubleTapEpisodeOutcomeRouter | None = None,
+    ) -> None:
+        self._events = events
+        self._event_by_key = event_by_key
+        self._outcome_router = outcome_router
+        self._fd = sys.stdin.fileno()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._original_termios: list[Any] | None = None
+        self._last_event_times: dict[str, float] = {}
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, name="evo-rlt-terminal-keyboard", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        try:
+            self._original_termios = termios.tcgetattr(self._fd)
+            tty.setcbreak(self._fd)
+            while not self._stop_event.is_set():
+                ready, _, _ = select.select([self._fd], [], [], 0.1)
+                if not ready:
+                    continue
+                key_name = self._read_key_name()
+                if key_name is not None:
+                    _dispatch_keyboard_event(
+                        self._events,
+                        key_name,
+                        self._event_by_key,
+                        self._last_event_times,
+                        self._outcome_router,
+                    )
+        except Exception:
+            logging.exception("Terminal keyboard listener stopped unexpectedly.")
+        finally:
+            if self._original_termios is not None:
+                termios.tcsetattr(self._fd, termios.TCSADRAIN, self._original_termios)
+
+    def _read_key_name(self) -> str | None:
+        chunk = os.read(self._fd, 1)
+        if not chunk:
+            return None
+
+        if chunk == b"\x1b":
+            sequence = bytearray(chunk)
+            while True:
+                ready, _, _ = select.select([self._fd], [], [], 0.01)
+                if not ready:
+                    break
+                sequence.extend(os.read(self._fd, 1))
+                if len(sequence) >= 3 and bytes(sequence[-1:]) in {b"A", b"B", b"C", b"D", b"~"}:
+                    break
+            sequence_bytes = bytes(sequence)
+            if sequence_bytes in {b"\x1b[C", b"\x1bOC"}:
+                return "right"
+            if sequence_bytes in {b"\x1b[D", b"\x1bOD"}:
+                return "left"
+            if sequence_bytes in {b"\x1b[A", b"\x1bOA"}:
+                return "up"
+            if sequence_bytes in {b"\x1b[B", b"\x1bOB"}:
+                return "down"
+            if sequence_bytes == b"\x1b":
+                return "esc"
+            return None
+
+        if chunk in {b"\r", b"\n"}:
+            return "enter"
+        if chunk == b" ":
+            return "space"
+        try:
+            decoded = chunk.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+        return decoded.lower() if decoded else None
+
+
+def _start_pynput_record_keyboard_listener(
+    events: dict[str, Any],
+    event_by_key: dict[str, str],
+    outcome_router: _DoubleTapEpisodeOutcomeRouter | None = None,
+):
+    from pynput import keyboard
+
+    last_event_times: dict[str, float] = {}
+
+    def on_press(key: Any) -> None:
+        key_name = _pynput_key_name(key, keyboard)
+        if key_name is None:
+            return
+        _dispatch_keyboard_event(events, key_name, event_by_key, last_event_times, outcome_router)
+
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+    return listener
+
+
+def _start_terminal_record_keyboard_listener(
+    events: dict[str, Any],
+    event_by_key: dict[str, str],
+    outcome_router: _DoubleTapEpisodeOutcomeRouter | None = None,
+) -> _EvoRLTTerminalKeyboardListener:
+    listener = _EvoRLTTerminalKeyboardListener(events, event_by_key, outcome_router)
+    listener.start()
+    logging.warning(
+        "Using terminal keyboard controls over the current TTY. Keep this terminal focused for "
+        "intervention/success/failure/RLT keys to be captured."
+    )
+    return listener
+
+
+def _patch_keyboard_backend_selection() -> None:
+    import lerobot.utils.control_utils as control_utils
+
+    if getattr(control_utils.init_keyboard_listener, "_evo_rlt_keyboard_backend_selection", False):
+        return
+
+    def init_keyboard_listener(*args, **kwargs):
+        if args:
+            logging.warning("Ignoring positional arguments passed to init_keyboard_listener: %s", args)
+
+        events = kwargs.pop("_evo_rlt_events", None)
+        if events is None:
+            events = {}
+        _ensure_record_events(events)
+
+        outcome_router = kwargs.pop("_evo_rlt_outcome_router", None)
+        extra_bindings = kwargs.pop("_evo_rlt_extra_bindings", None)
+        event_by_key = _build_keyboard_event_bindings(
+            intervention_toggle_key=kwargs.pop("intervention_toggle_key", "i"),
+            critical_phase_toggle_key=kwargs.pop("critical_phase_toggle_key", None),
+            episode_success_key=kwargs.pop("episode_success_key", None),
+            episode_failure_key=kwargs.pop("episode_failure_key", None),
+            cp_success_key=kwargs.pop("cp_success_key", None),
+            cp_failure_key=kwargs.pop("cp_failure_key", None),
+            rl_phase_key=kwargs.pop("rl_phase_key", None),
+            end_success_key=kwargs.pop("end_success_key", None),
+            end_failure_key=kwargs.pop("end_failure_key", None),
+            extra_bindings=extra_bindings,
+        )
+        if kwargs:
+            logging.warning("Ignoring unsupported keyboard listener kwargs: %s", sorted(kwargs))
+
+        backend = _get_keyboard_backend_preference()
+        if _should_prefer_tty_keyboard(backend):
+            return _start_terminal_record_keyboard_listener(events, event_by_key, outcome_router), events
+
+        if backend != "tty" and not control_utils.is_headless():
+            return _start_pynput_record_keyboard_listener(events, event_by_key, outcome_router), events
+
+        if sys.stdin.isatty():
+            return _start_terminal_record_keyboard_listener(events, event_by_key, outcome_router), events
+
+        logging.warning(
+            "Headless environment detected without an interactive TTY. Keyboard inputs will not be available."
+        )
+        return None, events
+
+    init_keyboard_listener._evo_rlt_keyboard_backend_selection = True
+    control_utils.init_keyboard_listener = init_keyboard_listener
+    backend_module = sys.modules.get("evo_rlt.adapters.lerobot.record.backend")
+    if backend_module is not None:
+        backend_module.init_keyboard_listener = init_keyboard_listener
 
 
 def _patch_double_tap_episode_outcome_listener(
@@ -267,9 +574,6 @@ def _patch_double_tap_episode_outcome_listener(
         rl_phase_key = kwargs.pop("rl_phase_key", None)
         end_success_key = kwargs.pop("end_success_key", None)
         end_failure_key = kwargs.pop("end_failure_key", None)
-        keyboard_listener, events = original_init_keyboard_listener()
-        _ensure_record_events(events)
-        router = _DoubleTapEpisodeOutcomeRouter(events, outcome_key, double_tap_window_s)
         record_key_bindings = {
             intervention_toggle_key: "toggle_intervention",
             critical_phase_toggle_key: "toggle_critical_phase",
@@ -279,6 +583,21 @@ def _patch_double_tap_episode_outcome_listener(
             end_success_key: "end_phase_success",
             end_failure_key: "end_phase_failure",
         }
+        if getattr(original_init_keyboard_listener, "_evo_rlt_keyboard_backend_selection", False):
+            events = {}
+            _ensure_record_events(events)
+            router = _DoubleTapEpisodeOutcomeRouter(events, outcome_key, double_tap_window_s)
+            keyboard_listener, events = original_init_keyboard_listener(
+                _evo_rlt_events=events,
+                _evo_rlt_outcome_router=router,
+                _evo_rlt_extra_bindings=record_key_bindings,
+            )
+            pedal_listener = _start_record_event_pedal_listener(events, record_key_bindings, router)
+            return _CompositeListener(keyboard_listener, pedal_listener, router), events
+
+        keyboard_listener, events = original_init_keyboard_listener()
+        _ensure_record_events(events)
+        router = _DoubleTapEpisodeOutcomeRouter(events, outcome_key, double_tap_window_s)
         pedal_listener = _start_record_event_pedal_listener(events, record_key_bindings, router)
         extra_keyboard_listener = _start_double_tap_keyboard_listener(outcome_key, router)
         record_event_listener = _start_record_event_keyboard_listener(events, record_key_bindings)
@@ -288,7 +607,12 @@ def _patch_double_tap_episode_outcome_listener(
         )
 
     init_keyboard_listener._evo_rlt_double_tap_episode_outcome = True
+    if getattr(original_init_keyboard_listener, "_evo_rlt_keyboard_backend_selection", False):
+        init_keyboard_listener._evo_rlt_keyboard_backend_selection = True
     control_utils.init_keyboard_listener = init_keyboard_listener
+    backend_module = sys.modules.get("evo_rlt.adapters.lerobot.record.backend")
+    if backend_module is not None:
+        backend_module.init_keyboard_listener = init_keyboard_listener
 
 
 def _patch_record_intervention_toggle_key(toggle_key: str) -> None:
