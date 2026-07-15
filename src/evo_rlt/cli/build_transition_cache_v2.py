@@ -28,7 +28,8 @@ from evo_rlt.adapters.lerobot.policies.action_modifier import PrefixOutputCaptur
 from evo_rlt.adapters.lerobot.policies.configuration_rlt_token import RLTokenPolicyConfig
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_token import RLTokenPolicy
 from evo_rlt.adapters.lerobot.policies.processor_rlt_token import make_rlt_token_pre_post_processors
-from evo_rlt.adapters.lerobot.offline_dataset import build_overlap_frame_indices
+from evo_rlt.adapters.lerobot.offline_dataset import _encoded_to_transitions, build_overlap_frame_indices
+from evo_rlt.core.interfaces import TRANSITION_SOURCE_DEMO, ChunkTransition
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,6 +58,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--empty-cache-every", type=int, default=4,
                    help="Call torch.cuda.empty_cache() every N batches.")
+    p.add_argument(
+        "--missing-episode-success",
+        choices=["success", "failure", "error"],
+        default="success",
+        help=(
+            "Fallback when dataset metadata lacks episode_success. "
+            "Use 'error' for strict relabeled datasets."
+        ),
+    )
     return p.parse_args()
 
 
@@ -64,6 +74,128 @@ def _log(msg: str) -> None:
     """Unbuffered timestamped log line."""
     ts = time.strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
+
+
+def _scalar_value(value):
+    if isinstance(value, Tensor):
+        value = value.detach().cpu()
+        if value.numel() == 1:
+            return value.item()
+        return value.tolist()
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return value[0]
+    return value
+
+
+def _parse_episode_success(value, ep_id: int) -> bool:
+    value = _scalar_value(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "success":
+            return True
+        if normalized == "failure":
+            return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    raise ValueError(f"Unrecognized episode_success value for episode {ep_id}: {value!r}")
+
+
+def _episode_success_from_metadata(dataset: LeRobotDataset, ep_id: int, missing_policy: str) -> bool:
+    episodes = getattr(getattr(dataset, "meta", None), "episodes", None)
+    raw = None
+    has_value = False
+    if episodes is not None:
+        try:
+            column = episodes["episode_success"]
+            raw = column[ep_id]
+            has_value = True
+        except (KeyError, IndexError, TypeError, AttributeError):
+            has_value = False
+
+    if has_value:
+        return _parse_episode_success(raw, ep_id)
+    if missing_policy == "error":
+        raise KeyError(
+            f"dataset metadata has no episode_success for episode {ep_id}; "
+            "relabel the dataset or pass --missing-episode-success"
+        )
+    return missing_policy == "success"
+
+
+def _extract_exec_chunk(preprocessed: dict, chunk_length: int, action_dim: int) -> Tensor:
+    if "action" not in preprocessed:
+        raise KeyError(
+            "preprocessed batch does not contain 'action'; transition cache v2 needs "
+            "dataset action chunks so exec_chunk is the action that was actually recorded"
+        )
+    action = preprocessed["action"]
+    if not isinstance(action, Tensor):
+        action = torch.as_tensor(action)
+    if action.ndim != 3:
+        raise ValueError(f"expected preprocessed action shape (B,H,D), got {tuple(action.shape)}")
+    if action.shape[1] < chunk_length:
+        raise ValueError(
+            f"preprocessed action horizon {action.shape[1]} is shorter than chunk_length={chunk_length}"
+        )
+    if action.shape[2] < action_dim:
+        raise ValueError(
+            f"preprocessed action dim {action.shape[2]} is smaller than action_dim={action_dim}"
+        )
+    return action[:, :chunk_length, :action_dim].detach().to("cpu")
+
+
+def _transition_to_dict(t: ChunkTransition) -> dict[str, Tensor]:
+    return {
+        "state_vec": t.state_vec,
+        "exec_chunk": t.exec_chunk,
+        "ref_chunk": t.ref_chunk,
+        "reward_seq": t.reward_seq,
+        "next_state_vec": t.next_state_vec,
+        "next_ref_chunk": t.next_ref_chunk,
+        "done": t.done,
+        "intervention": t.intervention,
+        "actual_steps": t.actual_steps,
+        "source": t.source,
+        "episode_id": t.episode_id,
+        "is_critical": t.is_critical,
+    }
+
+
+def _encoded_episode_to_transition_dicts(
+    state_vecs: Tensor,
+    ref_chunks: Tensor,
+    exec_chunks: Tensor,
+    frame_indices: list[int],
+    episode_last_frame: int,
+    chunk_length: int,
+    frame_stride: int,
+    episode_success: bool,
+    ep_id: int,
+) -> list[dict[str, Tensor]]:
+    if not (state_vecs.shape[0] == ref_chunks.shape[0] == exec_chunks.shape[0] == len(frame_indices)):
+        raise ValueError(
+            "encoded tensors and frame_indices must have matching first dimension: "
+            f"state={state_vecs.shape[0]} ref={ref_chunks.shape[0]} "
+            f"exec={exec_chunks.shape[0]} frames={len(frame_indices)}"
+        )
+    encoded = [
+        (state_vecs[i], ref_chunks[i], exec_chunks[i])
+        for i in range(len(frame_indices))
+    ]
+    transitions = _encoded_to_transitions(
+        encoded=encoded,
+        frame_indices=frame_indices,
+        episode_last_frame=episode_last_frame,
+        chunk_length=chunk_length,
+        stride=frame_stride,
+        episode_success=episode_success,
+        source=TRANSITION_SOURCE_DEMO,
+        episode_id=ep_id,
+        is_critical=1.0,
+    )
+    return [_transition_to_dict(t) for t in transitions]
 
 
 def _encode_episode(
@@ -82,11 +214,13 @@ def _encode_episode(
     empty_cache_every: int,
     task_str: str,
     ep_id: int,
+    episode_last_frame: int,
+    frame_stride: int,
+    episode_success: bool,
 ) -> list[dict[str, Tensor]]:
-    """Encode every base frame in `frame_indices`; build adjacent-frame transitions."""
-    out: list[dict[str, Tensor]] = []
+    """Encode sampled episode frames and build paper-style C-step transitions."""
     if not frame_indices:
-        return out
+        return []
 
     loader = DataLoader(
         Subset(dataset, frame_indices),
@@ -99,6 +233,7 @@ def _encode_episode(
 
     state_vecs: list[Tensor] = []
     ref_chunks: list[Tensor] = []
+    exec_chunks: list[Tensor] = []
     t_ep = time.time()
     for batch_i, batch in enumerate(loader):
         t_b = time.time()
@@ -114,8 +249,10 @@ def _encode_episode(
         proprio = pre["observation.state"][:, :proprio_dim].detach().to("cpu")
         state_vec = torch.cat([z.detach().to("cpu"), proprio], dim=-1)
         ref_chunk = vla_chunk[:, :chunk_length, :action_dim].detach().to("cpu")
+        exec_chunk = _extract_exec_chunk(pre, chunk_length, action_dim)
         state_vecs.append(state_vec)
         ref_chunks.append(ref_chunk)
+        exec_chunks.append(exec_chunk)
         del vla_chunk, prefix, z, pre
         if (batch_i + 1) % empty_cache_every == 0:
             torch.cuda.empty_cache()
@@ -126,29 +263,19 @@ def _encode_episode(
 
     state_vecs_t = torch.cat(state_vecs, dim=0)
     ref_chunks_t = torch.cat(ref_chunks, dim=0)
+    exec_chunks_t = torch.cat(exec_chunks, dim=0)
 
-    N = state_vecs_t.shape[0]
-    C = chunk_length
-    for i in range(N - 1):
-        is_last = i == (N - 2)
-        next_i = i + 1
-        out.append(
-            {
-                "state_vec": state_vecs_t[i],
-                "exec_chunk": ref_chunks_t[i],
-                "ref_chunk": ref_chunks_t[i],
-                "reward_seq": torch.zeros(C, dtype=torch.float32),
-                "next_state_vec": state_vecs_t[next_i],
-                "next_ref_chunk": ref_chunks_t[next_i],
-                "done": torch.tensor(float(is_last)),
-                "intervention": torch.tensor(0.0),
-                "actual_steps": torch.tensor(C, dtype=torch.int64),
-                "source": torch.tensor(0, dtype=torch.int64),
-                "episode_id": torch.tensor(ep_id, dtype=torch.int64),
-                "is_critical": torch.tensor(1.0),
-            }
-        )
-    return out
+    return _encoded_episode_to_transition_dicts(
+        state_vecs=state_vecs_t,
+        ref_chunks=ref_chunks_t,
+        exec_chunks=exec_chunks_t,
+        frame_indices=frame_indices,
+        episode_last_frame=episode_last_frame,
+        chunk_length=chunk_length,
+        frame_stride=frame_stride,
+        episode_success=episode_success,
+        ep_id=ep_id,
+    )
 
 
 def _save_partial(out_dir: pathlib.Path, split: str, transitions: list, label: str) -> None:
@@ -184,7 +311,7 @@ def main() -> None:
     preprocessor, _ = make_rlt_token_pre_post_processors(config=cfg)
 
     _log(f"load dataset {args.demo_dataset_repo_id} root={args.demo_dataset_root}")
-    delta = {"action": [i / 30.0 for i in range(cfg.chunk_size)]}
+    delta = {"action": [i / 30.0 for i in range(args.chunk_length)]}
     dataset = LeRobotDataset(
         repo_id=args.demo_dataset_repo_id,
         root=args.demo_dataset_root,
@@ -224,8 +351,13 @@ def main() -> None:
                 frame_indices = build_overlap_frame_indices(
                     episode_start=ep_from,
                     episode_stop=ep_to,
-                    chunk_length=cfg.chunk_size,
+                    chunk_length=args.chunk_length,
                     stride=args.frame_stride,
+                )
+                episode_success = _episode_success_from_metadata(
+                    dataset,
+                    ep_id,
+                    args.missing_episode_success,
                 )
                 _log(f"  [{split_name}] ep {k+1}/{len(eps)} id={ep_id} frames={ep_to-ep_from} chunks={len(frame_indices)} (total transitions={len(all_tx)}, wall={time.time()-t_start:.0f}s)")
                 ep_tx = _encode_episode(
@@ -244,6 +376,9 @@ def main() -> None:
                     empty_cache_every=args.empty_cache_every,
                     task_str=args.task_instruction,
                     ep_id=ep_id,
+                    episode_last_frame=ep_to - 1,
+                    frame_stride=args.frame_stride,
+                    episode_success=episode_success,
                 )
                 all_tx.extend(ep_tx)
                 if (k + 1) % 5 == 0 or (k + 1) == len(eps):

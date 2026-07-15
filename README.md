@@ -317,6 +317,12 @@ evo-rlt-build-transition-cache-v2 \
   --device cuda
 ```
 
+The v2 cache stores the recorded dataset action as `exec_chunk`, the pi0.5
+proposal as `ref_chunk`, bootstraps from `x_{t+C}`, and reads per-episode
+`episode_success` metadata for the terminal reward. If an older successful-demo
+dataset has no labels, the default is `--missing-episode-success success`; use
+`--missing-episode-success error` when you want strict relabeling checks.
+
 <a id="train-chunk-actor-critic"></a>
 
 ### 6) Train Chunk Actor-Critic
