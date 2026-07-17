@@ -25,12 +25,13 @@ class ChunkACPolicyConfig(PreTrainedConfig):
 
     # --- VLA + RL Token backbones (frozen, not serialized) ---
     vla_pretrained_path: str = "lerobot/pi05_base"
+    vla_type: str = "auto"
     vla_revision: str | None = None
     vla_dtype: str = "bfloat16"
     rl_token_pretrained_path: str = ""
 
     # --- RL Token arch (must match the loaded RLTokenPolicy ckpt) ---
-    rl_token_dim: int = 2048
+    rl_token_dim: int = 0
     rl_token_num_rl_tokens: int = 1
     token_pool_size: int = 0
     image_only: bool = False
@@ -74,7 +75,7 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     # --- Observation mapping (for deploy preprocessor) ---
     camera_keys: list[str] = field(default_factory=lambda: list(_DEFAULT_CAMERA_KEYS))
 
-    # --- Normalization MATCHES PI05 (deploy parity) ---
+    # --- Normalization MATCHES THE SFT VLA (deploy parity) ---
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.IDENTITY,
@@ -83,7 +84,7 @@ class ChunkACPolicyConfig(PreTrainedConfig):
         }
     )
 
-    # --- pi05 proxy fields ---
+    # --- VLA proxy fields ---
     max_state_dim: int = 32
     max_action_dim: int = 32
     image_resolution: tuple[int, int] = (224, 224)
@@ -99,6 +100,9 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     def __post_init__(self) -> None:
         self.ensure_registered()
         super().__post_init__()
+        from evo_rlt.adapters.lerobot.policies.vla_backbone import normalize_vla_type
+
+        self.vla_type = normalize_vla_type(self.vla_type)
         if self.phase_mode not in ("always_rl", "always_vla", "manual"):
             raise ValueError(
                 f"phase_mode must be 'always_rl', 'always_vla', or 'manual', got {self.phase_mode!r}"

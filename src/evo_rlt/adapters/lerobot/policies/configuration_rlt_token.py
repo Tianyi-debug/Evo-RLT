@@ -15,20 +15,21 @@ _DEFAULT_CAMERA_KEYS: list[str] = ["left_wrist", "right_wrist", "right_front"]
 class RLTokenPolicyConfig(PreTrainedConfig):
     """Config for the RL Token training policy.
 
-    Trains an RLTokenModule (encoder + decoder) that reconstructs pi0.5's prefix
-    hidden states. The frozen pi0.5 backbone is held in __dict__ at runtime so it
-    does not end up in the saved safetensors. Save layout matches SFT pi0.5:
+    Trains an RLTokenModule (encoder + decoder) that reconstructs VLA prefix
+    hidden states. The frozen VLA backbone is held in __dict__ at runtime so it
+    does not end up in the saved safetensors. Save layout matches the SFT VLA:
     config.json + model.safetensors (only rl_token weights) +
     policy_preprocessor.json + policy_postprocessor.json + train_config.json.
     """
 
     # --- VLA backbone (frozen, not serialized) ---
     vla_pretrained_path: str = "lerobot/pi05_base"
+    vla_type: str = "auto"
     vla_revision: str | None = None
     vla_dtype: str = "bfloat16"
 
     # --- RL Token encoder + decoder ---
-    rl_token_dim: int = 2048
+    rl_token_dim: int = 0
     rl_token_nhead: int = 8
     rl_token_enc_layers: int = 3
     rl_token_dec_layers: int = 3
@@ -63,7 +64,7 @@ class RLTokenPolicyConfig(PreTrainedConfig):
     # --- Observation mapping ---
     camera_keys: list[str] = field(default_factory=lambda: list(_DEFAULT_CAMERA_KEYS))
 
-    # --- Normalization MATCHES PI05 — this is the deploy-bug fix ---
+    # --- Normalization MATCHES THE SFT VLA — this is the deploy-bug fix ---
     normalization_mapping: dict[str, NormalizationMode] = field(
         default_factory=lambda: {
             "VISUAL": NormalizationMode.IDENTITY,
@@ -72,12 +73,12 @@ class RLTokenPolicyConfig(PreTrainedConfig):
         }
     )
 
-    # --- pi05 proxy fields (used by make_rlt_token_pre_post_processors) ---
+    # --- VLA proxy fields (used by make_rlt_token_pre_post_processors) ---
     max_state_dim: int = 32
     max_action_dim: int = 32
     image_resolution: tuple[int, int] = (224, 224)
     tokenizer_max_length: int = 200
-    tokenizer_path: str = "google/paligemma-3b-pt-224"
+    tokenizer_path: str | None = None
 
     @classmethod
     def ensure_registered(cls) -> None:
@@ -88,8 +89,13 @@ class RLTokenPolicyConfig(PreTrainedConfig):
     def __post_init__(self) -> None:
         self.ensure_registered()
         super().__post_init__()
-        if self.vla_dtype not in ("bfloat16", "float32"):
-            raise ValueError(f"vla_dtype must be 'bfloat16' or 'float32', got {self.vla_dtype!r}")
+        from evo_rlt.adapters.lerobot.policies.vla_backbone import normalize_vla_type
+
+        self.vla_type = normalize_vla_type(self.vla_type)
+        if self.vla_dtype not in ("bfloat16", "float16", "float32"):
+            raise ValueError(
+                f"vla_dtype must be 'bfloat16', 'float16', or 'float32', got {self.vla_dtype!r}"
+            )
         if self.recon_weight == 0 and self.vla_ft_weight == 0:
             raise ValueError("recon_weight and vla_ft_weight cannot both be zero")
 

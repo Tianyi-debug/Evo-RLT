@@ -1,11 +1,11 @@
 """Build chunk-transition cache for ChunkACPolicy training.
 
-Encodes each base frame in a LeRobotDataset through pi0.5 + the trained RL
+Encodes each base frame in a LeRobotDataset through VLA + the trained RL
 Token encoder into a (state_vec, exec_chunk, ref_chunk, ...) tuple stored on
 disk. The cache is consumed by ChunkTransitionDataset at AC training time.
 
 This v2 replaces the legacy custom-load builder. It loads the preprocessor
-directly from the SFT pi05 ckpt so the cache is byte-aligned with the deploy
+directly from the SFT VLA ckpt so the cache is byte-aligned with the deploy
 normalization. Per-batch progress with elapsed time is written to stdout in
 unbuffered mode so a hung run is visible immediately. Each completed episode
 is checkpointed to a tmp file so a kill mid-run only forfeits the in-flight
@@ -38,9 +38,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--demo-dataset-root", required=True)
     p.add_argument("--rl-token-policy-path", required=True)
     p.add_argument("--vla-pretrained-path", required=True,
-                   help="SFT pi05 ckpt dir — preprocessor source. Must match deploy.")
+                   help="SFT VLA ckpt dir — preprocessor source. Must match deploy.")
+    p.add_argument("--vla-type", default=None, choices=["auto", "pi05", "smolvla"],
+                   help="VLA backbone type. Defaults to the type saved in the RL-token checkpoint.")
     p.add_argument("--tokenizer-path", default=None,
-                   help="PaliGemma tokenizer repo id or local snapshot path for the SFT preprocessor.")
+                   help="Tokenizer repo id or local snapshot path for the SFT preprocessor.")
     p.add_argument("--output-dir", required=True)
     p.add_argument("--task-instruction", default="screw")
     p.add_argument("--chunk-length", type=int, default=10)
@@ -199,7 +201,7 @@ def _encoded_episode_to_transition_dicts(
 
 
 def _encode_episode(
-    pi05,
+    vla,
     rl_token,
     preprocessor,
     capture: PrefixOutputCapture,
@@ -241,7 +243,7 @@ def _encode_episode(
             batch["task"] = [task_str] * batch["observation.state"].shape[0]
         pre = preprocessor(batch)
         with torch.no_grad():
-            vla_chunk = pi05.predict_action_chunk(pre)
+            vla_chunk = vla.predict_action_chunk(pre)
             prefix = capture.consume()
             z = rl_token.encode(prefix.to(torch.float32))
         if z.dim() == 3:
@@ -302,12 +304,14 @@ def main() -> None:
     policy = RLTokenPolicy.from_pretrained(args.rl_token_policy_path).to(args.device).eval()
     cfg = policy.config
     # Override the policy's recorded vla path so the preprocessor we load is the
-    # SFT pi05's, even if the RL Token ckpt was trained against a different one.
+    # SFT VLA's, even if the RL Token ckpt was trained against a different one.
     cfg.vla_pretrained_path = args.vla_pretrained_path
+    if args.vla_type is not None:
+        cfg.vla_type = args.vla_type
     if args.tokenizer_path is not None:
         cfg.tokenizer_path = args.tokenizer_path
 
-    _log(f"load preprocessor from SFT pi05 dir {args.vla_pretrained_path}")
+    _log(f"load preprocessor from SFT VLA dir {args.vla_pretrained_path}")
     preprocessor, _ = make_rlt_token_pre_post_processors(config=cfg)
 
     _log(f"load dataset {args.demo_dataset_repo_id} root={args.demo_dataset_root}")
@@ -324,13 +328,15 @@ def main() -> None:
         n_episodes = min(n_episodes, args.max_episodes)
     _log(f"episodes: {n_episodes} of {dataset.num_episodes}; batch_size={args.batch_size} num_workers={args.num_workers}")
 
-    pi05 = policy._pi05
+    vla = policy._pi05
     rl_token = policy.rl_token
 
     capture = PrefixOutputCapture(
         token_pool_size=cfg.token_pool_size,
         image_only=cfg.image_only,
         num_image_tokens=policy._num_image_tokens,
+        num_per_camera=getattr(cfg, "num_per_camera", 0),
+        active_camera_indices=getattr(cfg, "active_camera_indices", None),
     )
     capture.attach(policy._pi05)
     try:
@@ -361,7 +367,7 @@ def main() -> None:
                 )
                 _log(f"  [{split_name}] ep {k+1}/{len(eps)} id={ep_id} frames={ep_to-ep_from} chunks={len(frame_indices)} (total transitions={len(all_tx)}, wall={time.time()-t_start:.0f}s)")
                 ep_tx = _encode_episode(
-                    pi05=pi05,
+                    vla=vla,
                     rl_token=rl_token,
                     preprocessor=preprocessor,
                     capture=capture,

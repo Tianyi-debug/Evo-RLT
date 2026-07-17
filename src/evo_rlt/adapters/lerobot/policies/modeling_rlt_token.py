@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +12,15 @@ from safetensors.torch import load_model as load_model_as_safetensor, save_model
 from torch import Tensor
 from typing_extensions import Unpack
 
-from lerobot.policies.pi05.configuration_pi05 import PI05Config
-from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 from lerobot.policies.pretrained import ActionSelectKwargs, PreTrainedPolicy
 from evo_rlt.adapters.lerobot.policies.configuration_rlt_token import RLTokenPolicyConfig
+from evo_rlt.adapters.lerobot.policies.vla_backbone import (
+    extract_prefix_hidden,
+    infer_num_image_tokens,
+    infer_vla_token_dim,
+    load_vla_policy,
+    get_vla_prefix_target,
+)
 from lerobot.policies.utils import log_model_loading_keys
 from evo_rlt.core.rl_token import RLTokenModule
 from evo_rlt.core.utils import postprocess_prefix_tokens
@@ -25,28 +28,6 @@ from evo_rlt.core.utils import postprocess_prefix_tokens
 log = logging.getLogger(__name__)
 
 VLA_SAFETENSORS_FILE = "vla.safetensors"
-
-
-def _load_pi05_config_from_dir(pretrained_path: str) -> PI05Config:
-    """Load a PI05Config from a ckpt dir, stripping the ``type`` polymorphic field.
-
-    The fork's PI05Config does not declare ``type``; draccus chokes if it's
-    present (which the SFT config.json always is). Strip and parse.
-    """
-    import draccus
-
-    config_path = Path(pretrained_path) / "config.json"
-    with open(config_path) as fh:
-        raw = json.load(fh)
-    raw.pop("type", None)
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tmp:
-        json.dump(raw, tmp)
-        tmp_path = tmp.name
-    try:
-        with draccus.config_type("json"):
-            return draccus.parse(PI05Config, tmp_path, args=[])
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
 
 
 def _load_norm_stats(path: str | None) -> Tensor | None:
@@ -69,11 +50,11 @@ def _load_norm_stats(path: str | None) -> Tensor | None:
 
 
 class RLTokenPolicy(PreTrainedPolicy):
-    """Training-only policy that fits an RLTokenModule on top of frozen pi0.5.
+    """Training-only policy that fits an RLTokenModule on top of a frozen VLA.
 
-    forward(batch) returns the reconstruction loss (+ optional pi0.5 supervised
-    loss when vla_ft_weight > 0). The frozen pi0.5 backbone is loaded in __init__
-    via PI05Policy.from_pretrained and stashed in self.__dict__ to bypass
+    forward(batch) returns the reconstruction loss (+ optional VLA supervised
+    loss when vla_ft_weight > 0). The frozen VLA backbone is loaded in __init__
+    and stashed in self.__dict__ to bypass
     nn.Module's submodule registration — so it is NOT serialized into the
     saved safetensors and does NOT appear in get_optim_params() either.
 
@@ -93,8 +74,11 @@ class RLTokenPolicy(PreTrainedPolicy):
         super().__init__(config, *args, **kwargs)
         self.config: RLTokenPolicyConfig = config
 
+        vla = self._load_vla_backbone()
+        token_dim = self._resolve_rl_token_dim(vla)
+
         self.rl_token = RLTokenModule(
-            token_dim=config.rl_token_dim,
+            token_dim=token_dim,
             nhead=config.rl_token_nhead,
             num_enc_layers=config.rl_token_enc_layers,
             num_dec_layers=config.rl_token_dec_layers,
@@ -103,11 +87,11 @@ class RLTokenPolicy(PreTrainedPolicy):
             inference_only=False,
         )
 
-        pi05 = self._load_pi05_backbone()
-        # Stash pi0.5 OUTSIDE nn.Module submodule tracking. nn.Module.__setattr__
+        # Stash VLA OUTSIDE nn.Module submodule tracking. nn.Module.__setattr__
         # registers nn.Module values into self._modules; object.__setattr__ stores
         # in self.__dict__ instead — so state_dict() / get_optim_params() skip it.
-        object.__setattr__(self, "_pi05", pi05)
+        object.__setattr__(self, "_pi05", vla)
+        object.__setattr__(self, "_vla", vla)
 
         std = _load_norm_stats(config.norm_stats_path)
         if std is not None:
@@ -115,41 +99,62 @@ class RLTokenPolicy(PreTrainedPolicy):
         else:
             self._dim_std = None  # type: ignore[assignment]
 
-        self._num_image_tokens: int = self._compute_num_image_tokens(pi05)
+        self._num_image_tokens: int = self._compute_num_image_tokens(vla)
 
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
 
-    def _load_pi05_backbone(self) -> PI05Policy:
-        pi05_cfg = _load_pi05_config_from_dir(self.config.vla_pretrained_path)
-        pi05_cfg.dtype = self.config.vla_dtype
-        pi05_cfg.device = self.config.device
-        pi05 = PI05Policy.from_pretrained(
+    def _load_vla_backbone(self):
+        return self._load_pi05_backbone()
+
+    def _load_pi05_backbone(self):
+        vla = load_vla_policy(
             self.config.vla_pretrained_path,
-            config=pi05_cfg,
+            vla_type=self.config.vla_type,
             revision=self.config.vla_revision,
-            strict=False,
+            dtype=self.config.vla_dtype,
+            device=self.config.device,
         )
         if self.config.vla_ft_weight == 0:
-            for p in pi05.parameters():
+            for p in vla.parameters():
                 p.requires_grad = False
-            pi05.eval()
-        return pi05
+            vla.eval()
+        return vla
 
-    def _compute_num_image_tokens(self, pi05: PI05Policy) -> int:
-        pwx = pi05.model.paligemma_with_expert
-        vision_cfg = pwx.paligemma.config.vision_config
-        tokens_per_camera = (self.config.image_resolution[0] // vision_cfg.patch_size) ** 2
-        num_cameras = len(self.config.camera_keys)
-        return tokens_per_camera * num_cameras
+    def _resolve_rl_token_dim(self, vla) -> int:
+        inferred = infer_vla_token_dim(vla)
+        configured = int(self.config.rl_token_dim or 0)
+        if configured <= 0:
+            if inferred is None:
+                raise ValueError(
+                    "policy.rl_token_dim=0 requests auto-inference, but Evo-RLT could "
+                    "not infer the VLA prefix hidden size. Set policy.rl_token_dim explicitly."
+                )
+            self.config.rl_token_dim = inferred
+            return inferred
+        if inferred is not None and inferred != configured:
+            raise ValueError(
+                f"policy.rl_token_dim={configured} does not match VLA prefix hidden size {inferred}. "
+                "Set policy.rl_token_dim=0 to auto-infer it."
+            )
+        return configured
+
+    def _compute_num_image_tokens(self, vla) -> int:
+        return infer_num_image_tokens(
+            vla,
+            image_resolution=self.config.image_resolution,
+            camera_keys=self.config.camera_keys,
+            num_per_camera=self.config.num_per_camera,
+            required=self.config.image_only or bool(self.config.active_camera_indices),
+        )
 
     # ------------------------------------------------------------------
-    # Persistence (cotrained pi0.5 lives outside nn.Module._modules)
+    # Persistence (cotrained VLA lives outside nn.Module._modules)
     # ------------------------------------------------------------------
 
     def _save_pretrained(self, save_directory: Path) -> None:
-        """Save RLT state via super, and also dump pi0.5 when it was fine-tuned.
+        """Save RLT state via super, and also dump the VLA when it was fine-tuned.
 
         Because `_pi05` is stashed via `object.__setattr__`, it is invisible to
         `state_dict()` and therefore to the standard safetensors save path. When
@@ -166,15 +171,14 @@ class RLTokenPolicy(PreTrainedPolicy):
 
     @classmethod
     def _load_as_safetensor(cls, model, model_file: str, map_location: str, strict: bool):
-        """Load RLT state via super, and also pi0.5 if a `vla.safetensors` sits beside it.
+        """Load RLT state via super, and also VLA if a `vla.safetensors` sits beside it.
 
         Old checkpoints (frozen-VLA runs or pre-patch saves) have no auxiliary
-        file; in that case the fresh pi0.5 loaded by ``__init__`` is kept as-is.
+        file; in that case the fresh VLA loaded by ``__init__`` is kept as-is.
         We deliberately avoid try/except here — file existence is the contract.
 
-        ``strict=False`` mirrors `_load_pi05_backbone`'s SFT-baseline load
-        (PI05Policy ships a weight-key remap path that explicitly requires
-        non-strict). Any missing/unexpected keys are still surfaced via
+        ``strict=False`` mirrors the SFT-baseline load path. Any
+        missing/unexpected keys are still surfaced via
         ``log_model_loading_keys`` — same diagnostic channel the base
         ``_load_as_safetensor`` uses for the RLT half.
         """
@@ -207,15 +211,14 @@ class RLTokenPolicy(PreTrainedPolicy):
         return groups
 
     def _forward_pi05_with_prefix(self, batch: dict[str, Tensor], reduction: str) -> tuple[Tensor, dict, Tensor]:
-        target = self._pi05.model.paligemma_with_expert
+        target = get_vla_prefix_target(self._pi05)
         original_forward = target.forward
         prefix_hidden: Tensor | None = None
 
         def patched_forward(*args, **kwargs):
             nonlocal prefix_hidden
             result = original_forward(*args, **kwargs)
-            outputs, _past_key_values = result
-            prefix_output = outputs[0]
+            prefix_output = extract_prefix_hidden(result)
             if prefix_output is not None:
                 prefix_hidden = prefix_output
             return result
@@ -227,11 +230,11 @@ class RLTokenPolicy(PreTrainedPolicy):
             target.forward = original_forward
 
         if prefix_hidden is None:
-            raise RuntimeError("PI05 forward did not produce prefix hidden states")
+            raise RuntimeError("VLA forward did not produce prefix hidden states")
         return loss, info, prefix_hidden
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict | None]:
-        """Reconstruction loss + optional pi0.5 supervised loss."""
+        """Reconstruction loss + optional VLA supervised loss."""
         if self.config.vla_ft_weight > 0:
             loss_vla, info, prefix_hidden = self._forward_pi05_with_prefix(batch, reduction="mean")
         else:

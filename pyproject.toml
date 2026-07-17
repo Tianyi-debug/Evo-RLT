@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 lerobot = [
-    "lerobot[pi] @ https://github.com/huggingface/lerobot/archive/refs/tags/v0.5.1.tar.gz",
+    "lerobot[pi,smolvla] @ https://github.com/huggingface/lerobot/archive/refs/tags/v0.5.1.tar.gz",
     "safetensors>=0.4.3",
     "packaging>=24.0",
     "evdev>=1.7",

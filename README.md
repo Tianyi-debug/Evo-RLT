@@ -68,7 +68,7 @@
 
 ### 1) Installation
 
-Evo-RLT depends on LeRobot `v0.5.1`, which currently ships from the official GitHub tag and requires Python 3.12+.
+Evo-RLT depends on LeRobot `v0.5.1`, which currently ships from the official GitHub tag and requires Python 3.12+. The `lerobot` extra installs both pi0.5 and SmolVLA policy dependencies.
 
 ```bash
 git clone https://github.com/MINT-SJTU/Evo-RLT.git
@@ -251,7 +251,7 @@ For saved checkpoints, LeRobot `0.5.1` writes numeric checkpoint directories suc
 
 ### 3) Finetune VLA
 
-Use LeRobot's training entrypoint to finetune a pi0.5 VLA checkpoint on a LeRobot dataset.
+Use LeRobot's training entrypoint to finetune a VLA checkpoint on a LeRobot dataset. For pi0.5, use a pi0.5 base checkpoint; for SmolVLA, use a SmolVLA base checkpoint such as `lerobot/smolvla_base`.
 
 ```bash
 python -m lerobot.scripts.lerobot_train \
@@ -269,6 +269,8 @@ python -m lerobot.scripts.lerobot_train \
   --job_name=vla_ft
 ```
 
+For SmolVLA, replace `--policy.path=<BASE_PI05_CHECKPOINT_DIR>` with `--policy.path=<BASE_SMOLVLA_CHECKPOINT_DIR>` and remove `--policy.dtype=...` if your SmolVLA config does not expose a dtype override. You can usually keep the same output directory layout; later RLT stages infer the RL-token hidden size from the finetuned VLA checkpoint.
+
 <a id="train-rl-token"></a>
 
 ### 4) Train RL Token
@@ -281,9 +283,9 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --policy.repo_id=<HF_ORG>/rlt_token \
   --policy.push_to_hub=false \
   --policy.vla_pretrained_path=outputs/vla_ft/checkpoints/last/pretrained_model \
+  --policy.vla_type=auto \
   --policy.vla_dtype=bfloat16 \
   --policy.rl_token_num_rl_tokens=1 \
-  --policy.tokenizer_path=/path/to/paligemma-3b-pt-224-snapshot \
   --policy.token_pool_size=0 \
   --policy.device=cuda \
   --batch_size=8 \
@@ -295,6 +297,8 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --job_name=rl_token
 ```
 
+For SmolVLA, set `--policy.vla_type=smolvla`. If your VLA preprocessor references a tokenizer repo that is not locally available, also pass `--policy.tokenizer_path=<LOCAL_TOKENIZER_OR_VLM_SNAPSHOT>`.
+
 <a id="build-transition-cache"></a>
 
 ### 5) Build Transition Cache
@@ -305,7 +309,6 @@ evo-rlt-build-transition-cache-v2 \
   --demo-dataset-root <LOCAL_DATASET_ROOT> \
   --rl-token-policy-path outputs/rl_token/checkpoints/last/pretrained_model \
   --vla-pretrained-path outputs/vla_ft/checkpoints/last/pretrained_model \
-  --tokenizer-path /path/to/paligemma-3b-pt-224-snapshot \
   --output-dir outputs/cache \
   --task-instruction "<TASK>" \
   --chunk-length 10 \
@@ -323,6 +326,8 @@ proposal as `ref_chunk`, bootstraps from `x_{t+C}`, and reads per-episode
 dataset has no labels, the default is `--missing-episode-success success`; use
 `--missing-episode-success error` when you want strict relabeling checks.
 
+For SmolVLA, add `--vla-type smolvla`. Add `--tokenizer-path <LOCAL_TOKENIZER_OR_VLM_SNAPSHOT>` only when the saved VLA preprocessor cannot load its tokenizer offline.
+
 <a id="train-chunk-actor-critic"></a>
 
 ### 6) Train Chunk Actor-Critic
@@ -336,9 +341,9 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --policy.repo_id=<HF_ORG>/rlt_ac \
   --policy.push_to_hub=false \
   --policy.vla_pretrained_path=outputs/vla_ft/checkpoints/last/pretrained_model \
+  --policy.vla_type=auto \
   --policy.rl_token_pretrained_path=outputs/rl_token/checkpoints/last/pretrained_model \
   --policy.vla_dtype=bfloat16 \
-  --policy.tokenizer_path=/path/to/paligemma-3b-pt-224-snapshot \
   --policy.rl_token_num_rl_tokens=1 \
   --policy.chunk_length=10 \
   --policy.chunk_exec_steps=25 \
@@ -351,6 +356,8 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --output_dir=outputs/ac \
   --job_name=rlt_ac
 ```
+
+For SmolVLA, set `--policy.vla_type=smolvla`. The actor-critic config reads the RL-token dimension from the saved `rlt_token` checkpoint, so you do not need to set `--policy.rl_token_dim`.
 
 <a id="real-robot-recording-and-deployment"></a>
 

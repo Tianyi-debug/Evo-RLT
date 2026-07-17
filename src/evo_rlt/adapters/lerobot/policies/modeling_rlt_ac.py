@@ -19,6 +19,10 @@ from lerobot.policies.rtc.latency_tracker import LatencyTracker
 from evo_rlt.adapters.lerobot.policies.action_modifier import PrefixOutputCapture, RLTActionModifier
 from evo_rlt.adapters.lerobot.policies.configuration_rlt_ac import ChunkACPolicyConfig
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_token import RLTokenPolicy
+from evo_rlt.adapters.lerobot.policies.vla_backbone import (
+    configure_vla_rtc,
+    infer_num_image_tokens,
+)
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
 from evo_rlt.core.losses import actor_loss, critic_loss
@@ -33,7 +37,7 @@ class ChunkACPolicy(PreTrainedPolicy):
 
     Holds two frozen backbones in __dict__ (so they don't land in safetensors):
       * `_rl_token_policy`: an RLTokenPolicy loaded from
-        config.rl_token_pretrained_path. It internally holds the frozen pi0.5
+        config.rl_token_pretrained_path. It internally holds the frozen VLA
         backbone, so we only need one stash for the whole VLA chain.
 
     Trainable modules (registered as nn submodules → in safetensors + optimizer):
@@ -129,10 +133,14 @@ class ChunkACPolicy(PreTrainedPolicy):
         for p in policy.parameters():
             p.requires_grad = False
         policy.eval()
+        if self.config.vla_type != "auto":
+            policy.config.vla_type = self.config.vla_type
         return policy
 
     def _validate_rl_token_arch(self, rl_token_policy: RLTokenPolicy) -> None:
         rtp_cfg = rl_token_policy.config
+        if not self.config.rl_token_dim:
+            self.config.rl_token_dim = rtp_cfg.rl_token_dim
         if rtp_cfg.rl_token_dim != self.config.rl_token_dim:
             raise ValueError(
                 f"rl_token_dim mismatch: ChunkACPolicyConfig={self.config.rl_token_dim} vs "
@@ -243,6 +251,8 @@ class ChunkACPolicy(PreTrainedPolicy):
                 token_pool_size=self.config.token_pool_size,
                 image_only=self.config.image_only,
                 num_image_tokens=self._compute_num_image_tokens(),
+                num_per_camera=self.config.num_per_camera,
+                active_camera_indices=self.config.active_camera_indices,
             )
             self._prefix_capture.attach(self._rl_token_policy._pi05)
         return self.modifier
@@ -269,11 +279,13 @@ class ChunkACPolicy(PreTrainedPolicy):
         return ctrl
 
     def _compute_num_image_tokens(self) -> int:
-        pi05 = self._rl_token_policy._pi05
-        pwx = pi05.model.paligemma_with_expert
-        vision_cfg = pwx.paligemma.config.vision_config
-        tokens_per_camera = (self.config.image_resolution[0] // vision_cfg.patch_size) ** 2
-        return tokens_per_camera * len(self.config.camera_keys)
+        return infer_num_image_tokens(
+            self._rl_token_policy._pi05,
+            image_resolution=self.config.image_resolution,
+            camera_keys=self.config.camera_keys,
+            num_per_camera=self.config.num_per_camera,
+            required=self.config.image_only or bool(self.config.active_camera_indices),
+        )
 
     def configure_rtc(
         self,
@@ -284,7 +296,7 @@ class ChunkACPolicy(PreTrainedPolicy):
     ) -> None:
         """Enable RTC chunk replacement for deployment-time ``select_action``.
 
-        ``predict_action_chunk`` already forwards RTC kwargs into the frozen pi0.5
+        ``predict_action_chunk`` already forwards RTC kwargs into the frozen VLA
         backbone. This runtime keeps an overlapping action queue so those kwargs
         contain the previous chunk leftovers and measured inference delay.
         """
@@ -321,9 +333,7 @@ class ChunkACPolicy(PreTrainedPolicy):
     def _set_pi05_rtc_config(self, rtc_config: RTCConfig) -> None:
         if self._active_pi05_rtc_config is rtc_config:
             return
-        pi05 = self._rl_token_policy._pi05
-        pi05.config.rtc_config = rtc_config
-        pi05.init_rtc_processor()
+        configure_vla_rtc(self._rl_token_policy._pi05, rtc_config)
         self._active_pi05_rtc_config = rtc_config
 
     def _clone_rtc_batch(self, batch: dict[str, Any]) -> dict[str, Any]:
