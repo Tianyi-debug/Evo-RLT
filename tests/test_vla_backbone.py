@@ -7,6 +7,7 @@ import torch
 from torch import nn
 
 from evo_rlt.adapters.lerobot.policies.vla_backbone import (
+    _pi05_checkpoint_is_device_direct_compatible,
     extract_prefix_hidden,
     get_vla_prefix_target,
     infer_num_image_tokens,
@@ -19,6 +20,24 @@ def test_infer_vla_type_from_config_json(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps({"type": "smolvla"}))
 
     assert infer_vla_type(str(tmp_path)) == "smolvla"
+
+
+def test_pi05_current_format_checkpoint_can_use_device_direct_load(tmp_path):
+    from safetensors.torch import save_file
+
+    model_file = tmp_path / "model.safetensors"
+    save_file({"model.layer.weight": torch.zeros(1)}, model_file)
+
+    assert _pi05_checkpoint_is_device_direct_compatible(model_file)
+
+
+def test_pi05_legacy_format_checkpoint_uses_fallback_loader(tmp_path):
+    from safetensors.torch import save_file
+
+    model_file = tmp_path / "model.safetensors"
+    save_file({"layer.weight": torch.zeros(1)}, model_file)
+
+    assert not _pi05_checkpoint_is_device_direct_compatible(model_file)
 
 
 def test_get_smolvla_prefix_target_and_extract_hidden():

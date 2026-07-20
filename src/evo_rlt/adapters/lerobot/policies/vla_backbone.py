@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -9,6 +11,7 @@ from torch import Tensor, nn
 
 
 SUPPORTED_VLA_TYPES = {"pi05", "smolvla"}
+log = logging.getLogger(__name__)
 
 
 def normalize_vla_type(vla_type: str | None) -> str:
@@ -82,6 +85,88 @@ def _tie_pi05_embed_tokens(policy: nn.Module) -> None:
         embed.weight = lm.lm_head.weight
 
 
+def _pi05_device_direct_load_enabled() -> bool:
+    value = os.environ.get("EVO_RLT_PI05_DEVICE_DIRECT_LOAD", "1")
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _pi05_checkpoint_is_device_direct_compatible(model_file: Path) -> bool:
+    """Return true when a pi0.5 checkpoint can skip LeRobot's CPU remap path."""
+    if not model_file.exists():
+        return False
+
+    try:
+        from safetensors import safe_open
+    except Exception:
+        return False
+
+    try:
+        with safe_open(model_file, framework="pt", device="cpu") as handle:
+            keys = list(handle.keys())
+    except Exception as exc:
+        log.debug("Could not inspect pi0.5 checkpoint keys for %s: %s", model_file, exc)
+        return False
+
+    if not keys:
+        return False
+    return all(key.startswith("model.") for key in keys)
+
+
+def _load_pi05_policy_device_direct(
+    policy_cls: type[nn.Module],
+    cfg: Any,
+    pretrained_path: str,
+    *,
+    strict: bool = False,
+) -> nn.Module | None:
+    """Load local current-format pi0.5 weights directly to the target device.
+
+    LeRobot's PI05Policy.from_pretrained override loads the full safetensors file
+    into a CPU state dict before remapping keys. Current Evo-RLT/pi0.5 checkpoints
+    already use the expected ``model.*`` keys, so safetensors can stream them to
+    the configured device and avoid a large CPU RAM peak. Older checkpoints keep
+    using the upstream path via the caller's fallback.
+    """
+    if not _pi05_device_direct_load_enabled():
+        return None
+
+    model_file = Path(pretrained_path) / "model.safetensors"
+    if not Path(pretrained_path).is_dir() or not _pi05_checkpoint_is_device_direct_compatible(model_file):
+        return None
+
+    try:
+        from safetensors.torch import load_model
+    except Exception:
+        return None
+
+    policy = None
+    try:
+        policy = policy_cls(cfg)
+        missing_keys, unexpected_keys = load_model(
+            policy,
+            str(model_file),
+            strict=strict,
+            device=getattr(cfg, "device", "cpu"),
+        )
+        if missing_keys:
+            log.info("pi0.5 device-direct load missing %d key(s)", len(missing_keys))
+        if unexpected_keys:
+            log.info("pi0.5 device-direct load ignored %d unexpected key(s)", len(unexpected_keys))
+        _tie_pi05_embed_tokens(policy)
+        policy.eval()
+        log.info("Loaded pi0.5 checkpoint with safetensors device-direct path: %s", model_file)
+        return policy
+    except Exception as exc:
+        log.warning(
+            "pi0.5 device-direct load failed for %s; falling back to LeRobot loader: %s",
+            model_file,
+            exc,
+        )
+        if policy is not None:
+            del policy
+        return None
+
+
 def load_vla_policy(
     pretrained_path: str,
     *,
@@ -101,12 +186,19 @@ def load_vla_policy(
             cfg.dtype = dtype
         if device is not None:
             cfg.device = device
-        policy = PI05Policy.from_pretrained(
+        policy = None if revision is not None else _load_pi05_policy_device_direct(
+            PI05Policy,
+            cfg,
             pretrained_path,
-            config=cfg,
-            revision=revision,
             strict=False,
         )
+        if policy is None:
+            policy = PI05Policy.from_pretrained(
+                pretrained_path,
+                config=cfg,
+                revision=revision,
+                strict=False,
+            )
         _tie_pi05_embed_tokens(policy)
         return policy
 
