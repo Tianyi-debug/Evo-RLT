@@ -436,7 +436,7 @@ Full-trajectory mode:
 r              save the full episode as success after the double-tap window
 r+r            save the full episode as failure
 space          toggle teleop intervention; pressing again exits teleop
-left arrow     rerecord the current episode
+left arrow     return to reset pose and rerecord the current episode
 Esc            stop data collection
 
 Critical-segment mode (`--only-critical`):
@@ -447,6 +447,15 @@ space          toggle teleop intervention; pressing again exits teleop
 left arrow     rerecord the current episode
 Esc            stop data collection
 ```
+
+`evo-rlt-record full` enables episode reset pose by default. After the robot connects, use the
+leader arm to move the follower to the episode start pose, then press Enter to capture it. Pressing
+`s`, `f`, or the left arrow returns the follower to this pose before the normal `--reset-time-s`
+window. The pose is saved to
+`~/.cache/huggingface/lerobot/failure_reset_pose/<robot_type>_<robot_id>.json` by default. Use
+`--no-reset-pose-recapture` to reuse an existing pose without prompting, `--no-auto-reset-pose` to
+disable return-to-start, `--reset-pose-path <JSON>` to choose another pose file, or
+`--reset-pose-duration-s <SECONDS>` to change the smooth return duration.
 
 VLA-only full-process recording with pedal outcome labels:
 

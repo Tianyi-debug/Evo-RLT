@@ -1,0 +1,2267 @@
+牛b
+i am here
+i am going
+导入wandb的key
+zty@honor:~/catkin_ws/src/Evo-RLT$ conda activate evo-rlt
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ export LEROBOT_KEYBOARD_BACKEND=tty
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ export HF_HUB_OFFLINE=1
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ tmux capture-pane -pS - > tmux_hist
+ory.log
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ evo-rlt-record full \
+>   --initial-source teleop \
+>   --setup-json configs/so101_two_cam_manifest.json \
+>   --task="Put the object into the target container." \
+>   --dataset-tag so101_pick_into_box_human_expert \
+>   --num-episodes 10 \
+>   --episode-time-s 3000 \
+>   --reset-time-s 0 \
+>   --fps 30 \
+>   --vcodec h264
+2026-07-14 23:58:41,686 INFO evo_rlt.adapters.lerobot.record.common: Single-arm
+teleop enabled: port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0
+2026-07-14 23:58:41,687 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower/
+my_awesome_follower_arm.json -> /tmp/record-full-t3aop11r/my_awesome_follower_ar
+m.json
+2026-07-14 23:58:41,687 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so101_le
+ader/my_awesome_leader_arm.json -> /tmp/record-leader-cal-1o6cvr_3/my_awesome_le
+ader_arm.json
+2026-07-14 23:58:46,652 INFO root: Could not import realsense: No module named '
+pyrealsense2'
+INFO 2026-07-14 23:58:50 /backend.py:549 {'acp_inference': {'cfg_beta': 1.0, 'en
+able': False, 'use_cfg': False},
+ 'collector_policy_id_human': 0,
+ 'collector_policy_id_policy': 1,
+ 'communication_retry_interval_s': 0.1,
+ 'communication_retry_timeout_s': 2.0,
+ 'critical_phase_toggle_key': ' ',
+ 'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 3000,
+             'fps': 30,
+             'num_episodes': 10,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'local/teleop_full_235841',
+             'reset_time_s': 0,
+             'root': '/home/zty/catkin_ws/src/Evo-RLT/data/0714_so101_pick_into_
+box_human_expert/teleop_full_235841',
+             'single_task': 'Put the object into the target container.',
+             'streaming_encoding': True,
+             'tags': None,
+             'vcodec': 'h264',
+             'video': True,
+             'video_encoding_batch_size': 11},
+ 'default_episode_success': None,
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'enable_collector_policy_id': True,
+ 'enable_critical_phase_labeling': False,
+ 'enable_episode_outcome_labeling': True,
+ 'episode_failure_key': 'f',
+ 'episode_success_key': 's',
+ 'intervention_state_machine_enabled': True,
+ 'intervention_toggle_key': 'i',
+ 'play_sounds': True,
+ 'policy': None,
+ 'policy_sync_parallel': True,
+ 'policy_sync_to_teleop': False,
+ 'require_episode_success_label': True,
+ 'resume': False,
+ 'rlt': {'ac_ckpt': '',
+         'actor_activation': 'relu',
+         'actor_hidden_dim': 256,
+         'actor_layer_norm': False,
+         'actor_num_layers': 3,
+         'actor_residual': True,
+         'chunk_exec_steps': 25,
+         'chunk_length': 10,
+         'critical_phase_toggle_key': 'p',
+         'default_reset_mode': 'full',
+         'deterministic': True,
+         'device': 'cuda',
+         'enable': False,
+         'end_failure_key': 'f',
+         'end_success_key': 's',
+         'image_only': False,
+         'intervention_action_blend_time_s': 0.0,
+         'phase_mode': 'manual',
+         'rl_phase_double_tap_window_s': 0.6,
+         'rl_phase_key': 'r',
+         'rl_phase_key_toggles_critical_phase': False,
+         'rl_phase_key_toggles_episode': False,
+         'rl_token_ckpt': '',
+         'rtc_action_queue_size_to_get_new_actions': None,
+         'rtc_enabled': True,
+         'rtc_execution_horizon': 10,
+         'rtc_max_guidance_weight': 10.0,
+         'rtc_prefix_attention_schedule': 'EXP',
+         'skip_prefix_recording': False,
+         'start_in_teleop': False,
+         'task_instruction': '',
+         'token_pool_size': 64,
+         'vla_model': '',
+         'vla_rtc_execution_horizon': None},
+ 'robot': {'calibration_dir': PosixPath('/tmp/record-full-t3aop11r'),
+           'cameras': {'front': {'backend': <Cv2Backends.V4L2: 200>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.V4L2: 200>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'robot_config_file': None,
+ 'teleop': {'calibration_dir': PosixPath('/tmp/record-leader-cal-1o6cvr_3'),
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_r_key_episodes': False,
+ 'vla_ref': True}
+INFO 2026-07-14 23:58:50 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-14 23:58:50 eo_utils.py:108 Using video codec: h264
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:58:51 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+Exception in thread OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0
+-video-index0)_read_loop:
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 445, in _read_loop
+    raw_frame = self._read_from_hardware()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 346, in _read_from_hardware
+    raise RuntimeError(f"{self} read failed (status={ret}).")
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) read failed (status=False).
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 107
+5, in _bootstrap_inner
+    self.run()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 101
+2, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 462, in _read_loop
+    raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") fr
+om e
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) exceeded maximum consecutive read failures.
+INFO 2026-07-14 23:58:52 ls/utils.py:142 Stop recording
+INFO 2026-07-14 23:58:53 ls/utils.py:142 Exiting
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/evo-rlt-record", line 6, in <modul
+e>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/cli.
+py", line 159, in main
+    args.func(args)
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/runn
+er.py", line 1126, in run_full
+    record()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 652, in record
+    robot.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/r
+obots/so_follower/so_follower.py", line 102, in connect
+    cam.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 173, in connect
+    self.async_read(timeout_ms=self.warmup_s * 1000)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 29, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 518, in async_read
+    raise TimeoutError(
+TimeoutError: Timed out waiting for frame from camera OpenCVCamera(/dev/v4l/by-p
+ath/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0) after 1000 ms. Read thread aliv
+e: False.
+INFO 2026-07-14 23:58:53 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) disconnected.
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ evo-rlt-record full \
+>   --initial-source teleop \
+>   --setup-json configs/so101_two_cam_manifest.json \
+>   --task="Put the object into the target container." \
+>   --dataset-tag so101_pick_into_box_human_expert \
+>   --num-episodes 10 \
+>   --episode-time-s 3000 \
+>   --reset-time-s 0 \
+>   --fps 30 \
+>   --vcodec h264
+2026-07-14 23:59:07,928 INFO evo_rlt.adapters.lerobot.record.common: Single-arm
+teleop enabled: port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0
+2026-07-14 23:59:07,928 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower/
+my_awesome_follower_arm.json -> /tmp/record-full-ajajej5b/my_awesome_follower_ar
+m.json
+2026-07-14 23:59:07,929 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so101_le
+ader/my_awesome_leader_arm.json -> /tmp/record-leader-cal-73sixs9f/my_awesome_le
+ader_arm.json
+2026-07-14 23:59:13,089 INFO root: Could not import realsense: No module named '
+pyrealsense2'
+INFO 2026-07-14 23:59:17 /backend.py:549 {'acp_inference': {'cfg_beta': 1.0, 'en
+able': False, 'use_cfg': False},
+ 'collector_policy_id_human': 0,
+ 'collector_policy_id_policy': 1,
+ 'communication_retry_interval_s': 0.1,
+ 'communication_retry_timeout_s': 2.0,
+ 'critical_phase_toggle_key': ' ',
+ 'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 3000,
+             'fps': 30,
+             'num_episodes': 10,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'local/teleop_full_235907',
+             'reset_time_s': 0,
+             'root': '/home/zty/catkin_ws/src/Evo-RLT/data/0714_so101_pick_into_
+box_human_expert/teleop_full_235907',
+             'single_task': 'Put the object into the target container.',
+             'streaming_encoding': True,
+             'tags': None,
+             'vcodec': 'h264',
+             'video': True,
+             'video_encoding_batch_size': 11},
+ 'default_episode_success': None,
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'enable_collector_policy_id': True,
+ 'enable_critical_phase_labeling': False,
+ 'enable_episode_outcome_labeling': True,
+ 'episode_failure_key': 'f',
+ 'episode_success_key': 's',
+ 'intervention_state_machine_enabled': True,
+ 'intervention_toggle_key': 'i',
+ 'play_sounds': True,
+ 'policy': None,
+ 'policy_sync_parallel': True,
+ 'policy_sync_to_teleop': False,
+ 'require_episode_success_label': True,
+ 'resume': False,
+ 'rlt': {'ac_ckpt': '',
+         'actor_activation': 'relu',
+         'actor_hidden_dim': 256,
+         'actor_layer_norm': False,
+         'actor_num_layers': 3,
+         'actor_residual': True,
+         'chunk_exec_steps': 25,
+         'chunk_length': 10,
+         'critical_phase_toggle_key': 'p',
+         'default_reset_mode': 'full',
+         'deterministic': True,
+         'device': 'cuda',
+         'enable': False,
+         'end_failure_key': 'f',
+         'end_success_key': 's',
+         'image_only': False,
+         'intervention_action_blend_time_s': 0.0,
+         'phase_mode': 'manual',
+         'rl_phase_double_tap_window_s': 0.6,
+         'rl_phase_key': 'r',
+         'rl_phase_key_toggles_critical_phase': False,
+         'rl_phase_key_toggles_episode': False,
+         'rl_token_ckpt': '',
+         'rtc_action_queue_size_to_get_new_actions': None,
+         'rtc_enabled': True,
+         'rtc_execution_horizon': 10,
+         'rtc_max_guidance_weight': 10.0,
+         'rtc_prefix_attention_schedule': 'EXP',
+         'skip_prefix_recording': False,
+         'start_in_teleop': False,
+         'task_instruction': '',
+         'token_pool_size': 64,
+         'vla_model': '',
+         'vla_rtc_execution_horizon': None},
+ 'robot': {'calibration_dir': PosixPath('/tmp/record-full-ajajej5b'),
+           'cameras': {'front': {'backend': <Cv2Backends.V4L2: 200>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.V4L2: 200>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'robot_config_file': None,
+ 'teleop': {'calibration_dir': PosixPath('/tmp/record-leader-cal-73sixs9f'),
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_r_key_episodes': False,
+ 'vla_ref': True}
+INFO 2026-07-14 23:59:17 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-14 23:59:17 eo_utils.py:108 Using video codec: h264
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:17 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+Exception in thread OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0
+-video-index0)_read_loop:
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 445, in _read_loop
+    raw_frame = self._read_from_hardware()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 346, in _read_from_hardware
+    raise RuntimeError(f"{self} read failed (status={ret}).")
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) read failed (status=False).
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 107
+5, in _bootstrap_inner
+    self.run()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 101
+2, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 462, in _read_loop
+    raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") fr
+om e
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) exceeded maximum consecutive read failures.
+INFO 2026-07-14 23:59:18 ls/utils.py:142 Stop recording
+INFO 2026-07-14 23:59:19 ls/utils.py:142 Exiting
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/evo-rlt-record", line 6, in <modul
+e>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/cli.
+py", line 159, in main
+    args.func(args)
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/runn
+er.py", line 1126, in run_full
+    record()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 652, in record
+    robot.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/r
+obots/so_follower/so_follower.py", line 102, in connect
+    cam.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 173, in connect
+    self.async_read(timeout_ms=self.warmup_s * 1000)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 29, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 518, in async_read
+    raise TimeoutError(
+TimeoutError: Timed out waiting for frame from camera OpenCVCamera(/dev/v4l/by-p
+ath/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0) after 1000 ms. Read thread aliv
+e: False.
+INFO 2026-07-14 23:59:20 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) disconnected.
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ evo-rlt-record full \
+>   --initial-source teleop \
+>   --setup-json configs/so101_two_cam_manifest.json \
+>   --task="Put the object into the target container." \
+>   --dataset-tag so101_pick_into_box_human_expert \
+>   --num-episodes 10 \
+>   --episode-time-s 3000 \
+>   --reset-time-s 0 \
+>   --fps 30 \
+>   --vcodec h264
+2026-07-14 23:59:39,976 INFO evo_rlt.adapters.lerobot.record.common: Single-arm
+teleop enabled: port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0
+2026-07-14 23:59:39,976 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower/
+my_awesome_follower_arm.json -> /tmp/record-full-2sg_h8od/my_awesome_follower_ar
+m.json
+2026-07-14 23:59:39,976 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so101_le
+ader/my_awesome_leader_arm.json -> /tmp/record-leader-cal-oyhddrrr/my_awesome_le
+ader_arm.json
+2026-07-14 23:59:45,306 INFO root: Could not import realsense: No module named '
+pyrealsense2'
+INFO 2026-07-14 23:59:49 /backend.py:549 {'acp_inference': {'cfg_beta': 1.0, 'en
+able': False, 'use_cfg': False},
+ 'collector_policy_id_human': 0,
+ 'collector_policy_id_policy': 1,
+ 'communication_retry_interval_s': 0.1,
+ 'communication_retry_timeout_s': 2.0,
+ 'critical_phase_toggle_key': ' ',
+ 'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 3000,
+             'fps': 30,
+             'num_episodes': 10,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'local/teleop_full_235939',
+             'reset_time_s': 0,
+             'root': '/home/zty/catkin_ws/src/Evo-RLT/data/0714_so101_pick_into_
+box_human_expert/teleop_full_235939',
+             'single_task': 'Put the object into the target container.',
+             'streaming_encoding': True,
+             'tags': None,
+             'vcodec': 'h264',
+             'video': True,
+             'video_encoding_batch_size': 11},
+ 'default_episode_success': None,
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'enable_collector_policy_id': True,
+ 'enable_critical_phase_labeling': False,
+ 'enable_episode_outcome_labeling': True,
+ 'episode_failure_key': 'f',
+ 'episode_success_key': 's',
+ 'intervention_state_machine_enabled': True,
+ 'intervention_toggle_key': 'i',
+ 'play_sounds': True,
+ 'policy': None,
+ 'policy_sync_parallel': True,
+ 'policy_sync_to_teleop': False,
+ 'require_episode_success_label': True,
+ 'resume': False,
+ 'rlt': {'ac_ckpt': '',
+         'actor_activation': 'relu',
+         'actor_hidden_dim': 256,
+         'actor_layer_norm': False,
+         'actor_num_layers': 3,
+         'actor_residual': True,
+         'chunk_exec_steps': 25,
+         'chunk_length': 10,
+         'critical_phase_toggle_key': 'p',
+         'default_reset_mode': 'full',
+         'deterministic': True,
+         'device': 'cuda',
+         'enable': False,
+         'end_failure_key': 'f',
+         'end_success_key': 's',
+         'image_only': False,
+         'intervention_action_blend_time_s': 0.0,
+         'phase_mode': 'manual',
+         'rl_phase_double_tap_window_s': 0.6,
+         'rl_phase_key': 'r',
+         'rl_phase_key_toggles_critical_phase': False,
+         'rl_phase_key_toggles_episode': False,
+         'rl_token_ckpt': '',
+         'rtc_action_queue_size_to_get_new_actions': None,
+         'rtc_enabled': True,
+         'rtc_execution_horizon': 10,
+         'rtc_max_guidance_weight': 10.0,
+         'rtc_prefix_attention_schedule': 'EXP',
+         'skip_prefix_recording': False,
+         'start_in_teleop': False,
+         'task_instruction': '',
+         'token_pool_size': 64,
+         'vla_model': '',
+         'vla_rtc_execution_horizon': None},
+ 'robot': {'calibration_dir': PosixPath('/tmp/record-full-2sg_h8od'),
+           'cameras': {'front': {'backend': <Cv2Backends.V4L2: 200>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.V4L2: 200>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'robot_config_file': None,
+ 'teleop': {'calibration_dir': PosixPath('/tmp/record-leader-cal-oyhddrrr'),
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_r_key_episodes': False,
+ 'vla_ref': True}
+INFO 2026-07-14 23:59:49 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-14 23:59:49 eo_utils.py:108 Using video codec: h264
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-14 23:59:49 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+Exception in thread OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0
+-video-index0)_read_loop:
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 445, in _read_loop
+    raw_frame = self._read_from_hardware()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 346, in _read_from_hardware
+    raise RuntimeError(f"{self} read failed (status={ret}).")
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) read failed (status=False).
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 107
+5, in _bootstrap_inner
+    self.run()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 101
+2, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 462, in _read_loop
+    raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") fr
+om e
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) exceeded maximum consecutive read failures.
+INFO 2026-07-14 23:59:50 ls/utils.py:142 Stop recording
+INFO 2026-07-14 23:59:52 ls/utils.py:142 Exiting
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/evo-rlt-record", line 6, in <modul
+e>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/cli.
+py", line 159, in main
+    args.func(args)
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/runn
+er.py", line 1126, in run_full
+    record()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 652, in record
+    robot.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/r
+obots/so_follower/so_follower.py", line 102, in connect
+    cam.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 173, in connect
+    self.async_read(timeout_ms=self.warmup_s * 1000)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 29, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 518, in async_read
+    raise TimeoutError(
+TimeoutError: Timed out waiting for frame from camera OpenCVCamera(/dev/v4l/by-p
+ath/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0) after 1000 ms. Read thread aliv
+e: False.
+INFO 2026-07-14 23:59:52 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) disconnected.
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$  lerobot-teleoperate \
+>   --robot.type=so101_follower \
+>   --robot.port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0 \
+>   --robot.id=my_awesome_follower_arm \
+>   --robot.cameras="{ front: {type: opencv, index_or_path: /dev/v4l/by-path/pci
+-0000:04:00.4-usb-0:1.3:1.0-video-index0, width: 640, height: 480, fps: 30, four
+cc: MJPG}, top: {type: opencv, index_or_path: /dev/v4l/by-path/pci-0000:04:00.4-
+usb-0:2.2:1.0-video-index0, width: 640, height: 480, fps: 30, fourcc: MJPG}}" \
+>   --teleop.type=so101_leader \
+>   --teleop.port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0 \
+>   --teleop.id=my_awesome_leader_arm \
+>   --display_data=true
+INFO 2026-07-15 00:00:24 eoperate.py:211 {'display_compressed_images': False,
+ 'display_data': True,
+ 'display_ip': None,
+ 'display_port': None,
+ 'fps': 60,
+ 'robot': {'calibration_dir': None,
+           'cameras': {'front': {'backend': <Cv2Backends.ANY: 0>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.ANY: 0>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'teleop': {'calibration_dir': None,
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_time_s': None}
+[2026-07-14T16:00:24Z INFO  re_grpc_server] Listening for gRPC connections on 0.
+0.0.0:9876. Connect by running `rerun --connect rerun+http://127.0.0.1:9876/prox
+y`
+[2026-07-14T16:00:24Z INFO  winit::platform_impl::linux::x11::window] Guessed wi
+ndow scale factor: 1
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/serial/se
+rialposix.py", line 322, in open
+    self.fd = os.open(self.portstr, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: '/dev/serial/by-path/pci-0000:04:
+00.4-usb-0:2.1:1.0'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 519, in _connect
+    if not self.port_handler.openPort():
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/scservo_s
+dk/port_handler.py", line 25, in openPort
+    return self.setBaudRate(self.baudrate)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/scservo_s
+dk/port_handler.py", line 49, in setBaudRate
+    return self.setupPort(baud)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/scservo_s
+dk/port_handler.py", line 95, in setupPort
+    self.ser = serial.Serial(
+               ^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/serial/se
+rialutil.py", line 244, in __init__
+    self.open()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/serial/se
+rialposix.py", line 325, in open
+    raise SerialException(msg.errno, "could not open port {}: {}".format(self._p
+ort, msg))
+serial.serialutil.SerialException: [Errno 13] could not open port /dev/serial/by
+-path/pci-0000:04:00.4-usb-0:2.1:1.0: [Errno 13] Permission denied: '/dev/serial
+/by-path/pci-0000:04:00.4-usb-0:2.1:1.0'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/lerobot-teleoperate", line 6, in <
+module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/s
+cripts/lerobot_teleoperate.py", line 250, in main
+    teleoperate()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/s
+cripts/lerobot_teleoperate.py", line 224, in teleoperate
+    teleop.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/t
+eleoperators/so_leader/so_leader.py", line 70, in connect
+    self.bus.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 513, in connect
+    self._connect(handshake)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 524, in _connect
+    raise ConnectionError(
+ConnectionError:
+Could not connect on port '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0'.
+Make sure you are using the correct port.
+Try running `lerobot-find-port`
+
+[2026-07-14T16:00:24Z WARN  wgpu_hal::vulkan::instance] Unable to find extension
+: VK_EXT_acquire_drm_display
+[2026-07-14T16:00:24Z WARN  wgpu_hal::vulkan::instance] Unable to find extension
+: VK_EXT_physical_device_drm
+[2026-07-14T16:00:24Z INFO  egui_wgpu] There were 4 available wgpu adapters: {ba
+ckend: Vulkan, device_type: Cpu, name: "llvmpipe (LLVM 12.0.0, 256 bits)", drive
+r: "llvmpipe", driver_info: "Mesa 21.2.6 (LLVM 12.0.0)", vendor: Mesa (0x10005)}
+, {backend: Vulkan, device_type: DiscreteGpu, name: "NVIDIA GeForce RTX 3050 Lap
+top GPU", driver: "NVIDIA", driver_info: "570.133.07", vendor: NVIDIA (0x10DE),
+device: 0x25A2}, {backend: Vulkan, device_type: IntegratedGpu, name: "AMD RADV R
+ENOIR", driver: "radv", driver_info: "Mesa 21.2.6", vendor: AMD (0x1002), device
+: 0x1638}, {backend: Gl, device_type: IntegratedGpu, name: "AMD RENOIR (DRM 3.42
+.0, 5.15.0-139-generic, LLVM 12.0.0)", driver_info: "4.6 (Core Profile) Mesa 21.
+2.6", vendor: AMD (0x1002)}
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$  lerobot-teleoperate \
+>   --robot.type=so101_follower \
+>   --robot.port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0 \
+>   --robot.id=my_awesome_follower_arm \
+>   --robot.cameras="{ front: {type: opencv, index_or_path: /dev/v4l/by-path/pci
+-0000:04:00.4-usb-0:1.3:1.0-video-index0, width: 640, height: 480, fps: 30, four
+cc: MJPG}, top: {type: opencv, index_or_path: /dev/v4l/by-path/pci-0000:04:00.4-
+usb-0:2.2:1.0-video-index0, width: 640, height: 480, fps: 30, fourcc: MJPG}}" \
+>   --teleop.type=so101_leader \
+>   --teleop.port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0 \
+>   --teleop.id=my_awesome_leader_arm \
+>   --display_data=true
+INFO 2026-07-15 00:00:58 eoperate.py:211 {'display_compressed_images': False,
+ 'display_data': True,
+ 'display_ip': None,
+ 'display_port': None,
+ 'fps': 60,
+ 'robot': {'calibration_dir': None,
+           'cameras': {'front': {'backend': <Cv2Backends.ANY: 0>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.ANY: 0>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'teleop': {'calibration_dir': None,
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_time_s': None}
+[2026-07-14T16:00:59Z INFO  re_grpc_server] Listening for gRPC connections on 0.
+0.0.0:9876. Connect by running `rerun --connect rerun+http://127.0.0.1:9876/prox
+y`
+[2026-07-14T16:00:59Z INFO  winit::platform_impl::linux::x11::window] Guessed wi
+ndow scale factor: 1
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/serial/se
+rialposix.py", line 322, in open
+    self.fd = os.open(self.portstr, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: '/dev/serial/by-path/pci-0000:04:
+00.4-usb-0:2.1:1.0'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 519, in _connect
+    if not self.port_handler.openPort():
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/scservo_s
+dk/port_handler.py", line 25, in openPort
+    return self.setBaudRate(self.baudrate)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/scservo_s
+dk/port_handler.py", line 49, in setBaudRate
+    return self.setupPort(baud)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/scservo_s
+dk/port_handler.py", line 95, in setupPort
+    self.ser = serial.Serial(
+               ^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/serial/se
+rialutil.py", line 244, in __init__
+    self.open()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/serial/se
+rialposix.py", line 325, in open
+    raise SerialException(msg.errno, "could not open port {}: {}".format(self._p
+ort, msg))
+serial.serialutil.SerialException: [Errno 13] could not open port /dev/serial/by
+-path/pci-0000:04:00.4-usb-0:2.1:1.0: [Errno 13] Permission denied: '/dev/serial
+/by-path/pci-0000:04:00.4-usb-0:2.1:1.0'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/lerobot-teleoperate", line 6, in <
+module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/s
+cripts/lerobot_teleoperate.py", line 250, in main
+    teleoperate()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/s
+cripts/lerobot_teleoperate.py", line 224, in teleoperate
+    teleop.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/t
+eleoperators/so_leader/so_leader.py", line 70, in connect
+    self.bus.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 513, in connect
+    self._connect(handshake)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 524, in _connect
+    raise ConnectionError(
+ConnectionError:
+Could not connect on port '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0'.
+Make sure you are using the correct port.
+Try running `lerobot-find-port`
+
+[2026-07-14T16:00:59Z WARN  wgpu_hal::vulkan::instance] Unable to find extension
+: VK_EXT_acquire_drm_display
+[2026-07-14T16:00:59Z WARN  wgpu_hal::vulkan::instance] Unable to find extension
+: VK_EXT_physical_device_drm
+[2026-07-14T16:00:59Z INFO  egui_wgpu] There were 4 available wgpu adapters: {ba
+ckend: Vulkan, device_type: Cpu, name: "llvmpipe (LLVM 12.0.0, 256 bits)", drive
+r: "llvmpipe", driver_info: "Mesa 21.2.6 (LLVM 12.0.0)", vendor: Mesa (0x10005)}
+, {backend: Vulkan, device_type: DiscreteGpu, name: "NVIDIA GeForce RTX 3050 Lap
+top GPU", driver: "NVIDIA", driver_info: "570.133.07", vendor: NVIDIA (0x10DE),
+device: 0x25A2}, {backend: Vulkan, device_type: IntegratedGpu, name: "AMD RADV R
+ENOIR", driver: "radv", driver_info: "Mesa 21.2.6", vendor: AMD (0x1002), device
+: 0x1638}, {backend: Gl, device_type: IntegratedGpu, name: "AMD RENOIR (DRM 3.42
+.0, 5.15.0-139-generic, LLVM 12.0.0)", driver_info: "4.6 (Core Profile) Mesa 21.
+2.6", vendor: AMD (0x1002)}
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM0
+[sudo] zty 的密码：
+对不起，请重试。
+[sudo] zty 的密码：
+chmod: 无法访问 '/dev/ttyACM0': 没有那个文件或目录
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM0
+chmod: 无法访问 '/dev/ttyACM0': 没有那个文件或目录
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM1
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM0
+chmod: 无法访问 '/dev/ttyACM0': 没有那个文件或目录
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM1
+chmod: 无法访问 '/dev/ttyACM1': 没有那个文件或目录
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM0
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM1
+chmod: 无法访问 '/dev/ttyACM1': 没有那个文件或目录
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM0
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM1
+chmod: 无法访问 '/dev/ttyACM1': 没有那个文件或目录
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM0
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM1
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ evo-rlt-record full \
+>   --initial-source teleop \
+>   --setup-json configs/so101_two_cam_manifest.json \
+>   --task="Put the object into the target container." \
+>   --dataset-tag so101_pick_into_box_human_expert \
+>   --num-episodes 10 \
+>   --episode-time-s 3000 \
+>   --reset-time-s 0 \
+>   --fps 30 \
+>   --vcodec h264
+2026-07-15 00:02:57,062 INFO evo_rlt.adapters.lerobot.record.common: Single-arm
+teleop enabled: port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0
+2026-07-15 00:02:57,063 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower/
+my_awesome_follower_arm.json -> /tmp/record-full-cqk7jh2t/my_awesome_follower_ar
+m.json
+2026-07-15 00:02:57,063 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so101_le
+ader/my_awesome_leader_arm.json -> /tmp/record-leader-cal-wgfpgxml/my_awesome_le
+ader_arm.json
+2026-07-15 00:03:02,102 INFO root: Could not import realsense: No module named '
+pyrealsense2'
+INFO 2026-07-15 00:03:06 /backend.py:549 {'acp_inference': {'cfg_beta': 1.0, 'en
+able': False, 'use_cfg': False},
+ 'collector_policy_id_human': 0,
+ 'collector_policy_id_policy': 1,
+ 'communication_retry_interval_s': 0.1,
+ 'communication_retry_timeout_s': 2.0,
+ 'critical_phase_toggle_key': ' ',
+ 'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 3000,
+             'fps': 30,
+             'num_episodes': 10,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'local/teleop_full_000257',
+             'reset_time_s': 0,
+             'root': '/home/zty/catkin_ws/src/Evo-RLT/data/0715_so101_pick_into_
+box_human_expert/teleop_full_000257',
+             'single_task': 'Put the object into the target container.',
+             'streaming_encoding': True,
+             'tags': None,
+             'vcodec': 'h264',
+             'video': True,
+             'video_encoding_batch_size': 11},
+ 'default_episode_success': None,
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'enable_collector_policy_id': True,
+ 'enable_critical_phase_labeling': False,
+ 'enable_episode_outcome_labeling': True,
+ 'episode_failure_key': 'f',
+ 'episode_success_key': 's',
+ 'intervention_state_machine_enabled': True,
+ 'intervention_toggle_key': 'i',
+ 'play_sounds': True,
+ 'policy': None,
+ 'policy_sync_parallel': True,
+ 'policy_sync_to_teleop': False,
+ 'require_episode_success_label': True,
+ 'resume': False,
+ 'rlt': {'ac_ckpt': '',
+         'actor_activation': 'relu',
+         'actor_hidden_dim': 256,
+         'actor_layer_norm': False,
+         'actor_num_layers': 3,
+         'actor_residual': True,
+         'chunk_exec_steps': 25,
+         'chunk_length': 10,
+         'critical_phase_toggle_key': 'p',
+         'default_reset_mode': 'full',
+         'deterministic': True,
+         'device': 'cuda',
+         'enable': False,
+         'end_failure_key': 'f',
+         'end_success_key': 's',
+         'image_only': False,
+         'intervention_action_blend_time_s': 0.0,
+         'phase_mode': 'manual',
+         'rl_phase_double_tap_window_s': 0.6,
+         'rl_phase_key': 'r',
+         'rl_phase_key_toggles_critical_phase': False,
+         'rl_phase_key_toggles_episode': False,
+         'rl_token_ckpt': '',
+         'rtc_action_queue_size_to_get_new_actions': None,
+         'rtc_enabled': True,
+         'rtc_execution_horizon': 10,
+         'rtc_max_guidance_weight': 10.0,
+         'rtc_prefix_attention_schedule': 'EXP',
+         'skip_prefix_recording': False,
+         'start_in_teleop': False,
+         'task_instruction': '',
+         'token_pool_size': 64,
+         'vla_model': '',
+         'vla_rtc_execution_horizon': None},
+ 'robot': {'calibration_dir': PosixPath('/tmp/record-full-cqk7jh2t'),
+           'cameras': {'front': {'backend': <Cv2Backends.V4L2: 200>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.V4L2: 200>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'robot_config_file': None,
+ 'teleop': {'calibration_dir': PosixPath('/tmp/record-leader-cal-wgfpgxml'),
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_r_key_episodes': False,
+ 'vla_ref': True}
+INFO 2026-07-15 00:03:06 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-15 00:03:06 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-15 00:03:07 ls/utils.py:142 Stop recording
+INFO 2026-07-15 00:03:08 ls/utils.py:142 Exiting
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/evo-rlt-record", line 6, in <modul
+e>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/cli.
+py", line 159, in main
+    args.func(args)
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/runn
+er.py", line 1126, in run_full
+    record()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 652, in record
+    robot.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/r
+obots/so_follower/so_follower.py", line 102, in connect
+    cam.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 173, in connect
+    self.async_read(timeout_ms=self.warmup_s * 1000)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 29, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 518, in async_read
+    raise TimeoutError(
+TimeoutError: Timed out waiting for frame from camera OpenCVCamera(/dev/v4l/by-p
+ath/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0) after 1000 ms. Read thread aliv
+e: True.
+FATAL: exception not rethrown
+已放弃 (核心已转储)
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ evo-rlt-record full \
+>   --initial-source teleop \
+>   --setup-json configs/so101_two_cam_manifest.json \
+>   --task="Put the object into the target container." \
+>   --dataset-tag so101_pick_into_box_human_expert \
+>   --num-episodes 10 \
+>   --episode-time-s 3000 \
+>   --reset-time-s 0 \
+>   --fps 30 \
+>   --vcodec h264
+2026-07-15 00:03:26,753 INFO evo_rlt.adapters.lerobot.record.common: Single-arm
+teleop enabled: port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0
+2026-07-15 00:03:26,753 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower/
+my_awesome_follower_arm.json -> /tmp/record-full-tkqzs1ua/my_awesome_follower_ar
+m.json
+2026-07-15 00:03:26,754 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so101_le
+ader/my_awesome_leader_arm.json -> /tmp/record-leader-cal-uknn4ydv/my_awesome_le
+ader_arm.json
+2026-07-15 00:03:32,076 INFO root: Could not import realsense: No module named '
+pyrealsense2'
+INFO 2026-07-15 00:03:36 /backend.py:549 {'acp_inference': {'cfg_beta': 1.0, 'en
+able': False, 'use_cfg': False},
+ 'collector_policy_id_human': 0,
+ 'collector_policy_id_policy': 1,
+ 'communication_retry_interval_s': 0.1,
+ 'communication_retry_timeout_s': 2.0,
+ 'critical_phase_toggle_key': ' ',
+ 'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 3000,
+             'fps': 30,
+             'num_episodes': 10,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'local/teleop_full_000326',
+             'reset_time_s': 0,
+             'root': '/home/zty/catkin_ws/src/Evo-RLT/data/0715_so101_pick_into_
+box_human_expert/teleop_full_000326',
+             'single_task': 'Put the object into the target container.',
+             'streaming_encoding': True,
+             'tags': None,
+             'vcodec': 'h264',
+             'video': True,
+             'video_encoding_batch_size': 11},
+ 'default_episode_success': None,
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'enable_collector_policy_id': True,
+ 'enable_critical_phase_labeling': False,
+ 'enable_episode_outcome_labeling': True,
+ 'episode_failure_key': 'f',
+ 'episode_success_key': 's',
+ 'intervention_state_machine_enabled': True,
+ 'intervention_toggle_key': 'i',
+ 'play_sounds': True,
+ 'policy': None,
+ 'policy_sync_parallel': True,
+ 'policy_sync_to_teleop': False,
+ 'require_episode_success_label': True,
+ 'resume': False,
+ 'rlt': {'ac_ckpt': '',
+         'actor_activation': 'relu',
+         'actor_hidden_dim': 256,
+         'actor_layer_norm': False,
+         'actor_num_layers': 3,
+         'actor_residual': True,
+         'chunk_exec_steps': 25,
+         'chunk_length': 10,
+         'critical_phase_toggle_key': 'p',
+         'default_reset_mode': 'full',
+         'deterministic': True,
+         'device': 'cuda',
+         'enable': False,
+         'end_failure_key': 'f',
+         'end_success_key': 's',
+         'image_only': False,
+         'intervention_action_blend_time_s': 0.0,
+         'phase_mode': 'manual',
+         'rl_phase_double_tap_window_s': 0.6,
+         'rl_phase_key': 'r',
+         'rl_phase_key_toggles_critical_phase': False,
+         'rl_phase_key_toggles_episode': False,
+         'rl_token_ckpt': '',
+         'rtc_action_queue_size_to_get_new_actions': None,
+         'rtc_enabled': True,
+         'rtc_execution_horizon': 10,
+         'rtc_max_guidance_weight': 10.0,
+         'rtc_prefix_attention_schedule': 'EXP',
+         'skip_prefix_recording': False,
+         'start_in_teleop': False,
+         'task_instruction': '',
+         'token_pool_size': 64,
+         'vla_model': '',
+         'vla_rtc_execution_horizon': None},
+ 'robot': {'calibration_dir': PosixPath('/tmp/record-full-tkqzs1ua'),
+           'cameras': {'front': {'backend': <Cv2Backends.V4L2: 200>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.V4L2: 200>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'robot_config_file': None,
+ 'teleop': {'calibration_dir': PosixPath('/tmp/record-leader-cal-uknn4ydv'),
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_r_key_episodes': False,
+ 'vla_ref': True}
+INFO 2026-07-15 00:03:36 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-15 00:03:36 eo_utils.py:108 Using video codec: h264
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:03:36 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+Exception in thread OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0
+-video-index0)_read_loop:
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 445, in _read_loop
+    raw_frame = self._read_from_hardware()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 346, in _read_from_hardware
+    raise RuntimeError(f"{self} read failed (status={ret}).")
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) read failed (status=False).
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 107
+5, in _bootstrap_inner
+    self.run()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 101
+2, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 462, in _read_loop
+    raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") fr
+om e
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) exceeded maximum consecutive read failures.
+INFO 2026-07-15 00:03:37 ls/utils.py:142 Stop recording
+INFO 2026-07-15 00:03:39 ls/utils.py:142 Exiting
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/evo-rlt-record", line 6, in <modul
+e>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/cli.
+py", line 159, in main
+    args.func(args)
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/runn
+er.py", line 1126, in run_full
+    record()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 652, in record
+    robot.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/r
+obots/so_follower/so_follower.py", line 102, in connect
+    cam.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 173, in connect
+    self.async_read(timeout_ms=self.warmup_s * 1000)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 29, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 518, in async_read
+    raise TimeoutError(
+TimeoutError: Timed out waiting for frame from camera OpenCVCamera(/dev/v4l/by-p
+ath/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0) after 1000 ms. Read thread aliv
+e: False.
+INFO 2026-07-15 00:03:39 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) disconnected.
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ evo-rlt-record full \
+>   --initial-source teleop \
+>   --setup-json configs/so101_two_cam_manifest.json \
+>   --task="Put the object into the target container." \
+>   --dataset-tag so101_pick_into_box_human_expert \
+>   --num-episodes 10 \
+>   --episode-time-s 3000 \
+>   --reset-time-s 0 \
+>   --fps 30 \
+>   --vcodec h264
+2026-07-15 00:06:35,785 INFO evo_rlt.adapters.lerobot.record.common: Single-arm
+teleop enabled: port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0
+2026-07-15 00:06:35,785 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower/
+my_awesome_follower_arm.json -> /tmp/record-full-7e59vjs5/my_awesome_follower_ar
+m.json
+2026-07-15 00:06:35,786 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so101_le
+ader/my_awesome_leader_arm.json -> /tmp/record-leader-cal-b5uq9rxa/my_awesome_le
+ader_arm.json
+2026-07-15 00:06:40,894 INFO root: Could not import realsense: No module named '
+pyrealsense2'
+INFO 2026-07-15 00:06:44 /backend.py:549 {'acp_inference': {'cfg_beta': 1.0, 'en
+able': False, 'use_cfg': False},
+ 'collector_policy_id_human': 0,
+ 'collector_policy_id_policy': 1,
+ 'communication_retry_interval_s': 0.1,
+ 'communication_retry_timeout_s': 2.0,
+ 'critical_phase_toggle_key': ' ',
+ 'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 3000,
+             'fps': 30,
+             'num_episodes': 10,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'local/teleop_full_000635',
+             'reset_time_s': 0,
+             'root': '/home/zty/catkin_ws/src/Evo-RLT/data/0715_so101_pick_into_
+box_human_expert/teleop_full_000635',
+             'single_task': 'Put the object into the target container.',
+             'streaming_encoding': True,
+             'tags': None,
+             'vcodec': 'h264',
+             'video': True,
+             'video_encoding_batch_size': 11},
+ 'default_episode_success': None,
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'enable_collector_policy_id': True,
+ 'enable_critical_phase_labeling': False,
+ 'enable_episode_outcome_labeling': True,
+ 'episode_failure_key': 'f',
+ 'episode_success_key': 's',
+ 'intervention_state_machine_enabled': True,
+ 'intervention_toggle_key': 'i',
+ 'play_sounds': True,
+ 'policy': None,
+ 'policy_sync_parallel': True,
+ 'policy_sync_to_teleop': False,
+ 'require_episode_success_label': True,
+ 'resume': False,
+ 'rlt': {'ac_ckpt': '',
+         'actor_activation': 'relu',
+         'actor_hidden_dim': 256,
+         'actor_layer_norm': False,
+         'actor_num_layers': 3,
+         'actor_residual': True,
+         'chunk_exec_steps': 25,
+         'chunk_length': 10,
+         'critical_phase_toggle_key': 'p',
+         'default_reset_mode': 'full',
+         'deterministic': True,
+         'device': 'cuda',
+         'enable': False,
+         'end_failure_key': 'f',
+         'end_success_key': 's',
+         'image_only': False,
+         'intervention_action_blend_time_s': 0.0,
+         'phase_mode': 'manual',
+         'rl_phase_double_tap_window_s': 0.6,
+         'rl_phase_key': 'r',
+         'rl_phase_key_toggles_critical_phase': False,
+         'rl_phase_key_toggles_episode': False,
+         'rl_token_ckpt': '',
+         'rtc_action_queue_size_to_get_new_actions': None,
+         'rtc_enabled': True,
+         'rtc_execution_horizon': 10,
+         'rtc_max_guidance_weight': 10.0,
+         'rtc_prefix_attention_schedule': 'EXP',
+         'skip_prefix_recording': False,
+         'start_in_teleop': False,
+         'task_instruction': '',
+         'token_pool_size': 64,
+         'vla_model': '',
+         'vla_rtc_execution_horizon': None},
+ 'robot': {'calibration_dir': PosixPath('/tmp/record-full-7e59vjs5'),
+           'cameras': {'front': {'backend': <Cv2Backends.V4L2: 200>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.V4L2: 200>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'robot_config_file': None,
+ 'teleop': {'calibration_dir': PosixPath('/tmp/record-leader-cal-b5uq9rxa'),
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_r_key_episodes': False,
+ 'vla_ref': True}
+INFO 2026-07-15 00:06:44 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-15 00:06:44 eo_utils.py:108 Using video codec: h264
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+WARNING 2026-07-15 00:06:45 a_opencv.py:460 Error reading frame in background th
+read for OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-inde
+x0): OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0)
+read failed (status=False).
+Exception in thread OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0
+-video-index0)_read_loop:
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 445, in _read_loop
+    raw_frame = self._read_from_hardware()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 346, in _read_from_hardware
+    raise RuntimeError(f"{self} read failed (status={ret}).")
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) read failed (status=False).
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 107
+5, in _bootstrap_inner
+    self.run()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/threading.py", line 101
+2, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 462, in _read_loop
+    raise RuntimeError(f"{self} exceeded maximum consecutive read failures.") fr
+om e
+RuntimeError: OpenCVCamera(/dev/v4l/by-path/pci-0000:04:00.4-usb-0:1.3:1.0-video
+-index0) exceeded maximum consecutive read failures.
+INFO 2026-07-15 00:06:46 ls/utils.py:142 Stop recording
+INFO 2026-07-15 00:06:47 ls/utils.py:142 Exiting
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/evo-rlt-record", line 6, in <modul
+e>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/cli.
+py", line 159, in main
+    args.func(args)
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/runn
+er.py", line 1126, in run_full
+    record()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 652, in record
+    robot.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/r
+obots/so_follower/so_follower.py", line 102, in connect
+    cam.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 173, in connect
+    self.async_read(timeout_ms=self.warmup_s * 1000)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 29, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+ameras/opencv/camera_opencv.py", line 518, in async_read
+    raise TimeoutError(
+TimeoutError: Timed out waiting for frame from camera OpenCVCamera(/dev/v4l/by-p
+ath/pci-0000:04:00.4-usb-0:1.3:1.0-video-index0) after 1000 ms. Read thread aliv
+e: False.
+INFO 2026-07-15 00:06:47 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) disconnected.
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM0
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ sudo chmod 666 /dev/ttyACM1
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ evo-rlt-record full \
+>   --initial-source teleop \
+>   --setup-json configs/so101_two_cam_manifest.json \
+>   --task="Put the object into the target container." \
+>   --dataset-tag so101_pick_into_box_human_expert \
+>   --num-episodes 10 \
+>   --episode-time-s 3000 \
+>   --reset-time-s 0 \
+>   --fps 30 \
+>   --vcodec h264
+2026-07-15 00:08:13,919 INFO evo_rlt.adapters.lerobot.record.common: Single-arm
+teleop enabled: port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0
+2026-07-15 00:08:13,920 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower/
+my_awesome_follower_arm.json -> /tmp/record-full-bgsb33di/my_awesome_follower_ar
+m.json
+2026-07-15 00:08:13,920 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so101_le
+ader/my_awesome_leader_arm.json -> /tmp/record-leader-cal-vddgkuoo/my_awesome_le
+ader_arm.json
+2026-07-15 00:08:19,003 INFO root: Could not import realsense: No module named '
+pyrealsense2'
+INFO 2026-07-15 00:08:22 /backend.py:549 {'acp_inference': {'cfg_beta': 1.0, 'en
+able': False, 'use_cfg': False},
+ 'collector_policy_id_human': 0,
+ 'collector_policy_id_policy': 1,
+ 'communication_retry_interval_s': 0.1,
+ 'communication_retry_timeout_s': 2.0,
+ 'critical_phase_toggle_key': ' ',
+ 'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 3000,
+             'fps': 30,
+             'num_episodes': 10,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'local/teleop_full_000813',
+             'reset_time_s': 0,
+             'root': '/home/zty/catkin_ws/src/Evo-RLT/data/0715_so101_pick_into_
+box_human_expert/teleop_full_000813',
+             'single_task': 'Put the object into the target container.',
+             'streaming_encoding': True,
+             'tags': None,
+             'vcodec': 'h264',
+             'video': True,
+             'video_encoding_batch_size': 11},
+ 'default_episode_success': None,
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'enable_collector_policy_id': True,
+ 'enable_critical_phase_labeling': False,
+ 'enable_episode_outcome_labeling': True,
+ 'episode_failure_key': 'f',
+ 'episode_success_key': 's',
+ 'intervention_state_machine_enabled': True,
+ 'intervention_toggle_key': 'i',
+ 'play_sounds': True,
+ 'policy': None,
+ 'policy_sync_parallel': True,
+ 'policy_sync_to_teleop': False,
+ 'require_episode_success_label': True,
+ 'resume': False,
+ 'rlt': {'ac_ckpt': '',
+         'actor_activation': 'relu',
+         'actor_hidden_dim': 256,
+         'actor_layer_norm': False,
+         'actor_num_layers': 3,
+         'actor_residual': True,
+         'chunk_exec_steps': 25,
+         'chunk_length': 10,
+         'critical_phase_toggle_key': 'p',
+         'default_reset_mode': 'full',
+         'deterministic': True,
+         'device': 'cuda',
+         'enable': False,
+         'end_failure_key': 'f',
+         'end_success_key': 's',
+         'image_only': False,
+         'intervention_action_blend_time_s': 0.0,
+         'phase_mode': 'manual',
+         'rl_phase_double_tap_window_s': 0.6,
+         'rl_phase_key': 'r',
+         'rl_phase_key_toggles_critical_phase': False,
+         'rl_phase_key_toggles_episode': False,
+         'rl_token_ckpt': '',
+         'rtc_action_queue_size_to_get_new_actions': None,
+         'rtc_enabled': True,
+         'rtc_execution_horizon': 10,
+         'rtc_max_guidance_weight': 10.0,
+         'rtc_prefix_attention_schedule': 'EXP',
+         'skip_prefix_recording': False,
+         'start_in_teleop': False,
+         'task_instruction': '',
+         'token_pool_size': 64,
+         'vla_model': '',
+         'vla_rtc_execution_horizon': None},
+ 'robot': {'calibration_dir': PosixPath('/tmp/record-full-bgsb33di'),
+           'cameras': {'front': {'backend': <Cv2Backends.V4L2: 200>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.V4L2: 200>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'robot_config_file': None,
+ 'teleop': {'calibration_dir': PosixPath('/tmp/record-leader-cal-vddgkuoo'),
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_r_key_episodes': False,
+ 'vla_ref': True}
+INFO 2026-07-15 00:08:22 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-15 00:08:22 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-15 00:08:24 a_opencv.py:179 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) connected.
+INFO 2026-07-15 00:08:25 a_opencv.py:179 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:2.2:1.0-video-index0) connected.
+INFO 2026-07-15 00:08:25 ls/utils.py:142 Stop recording
+INFO 2026-07-15 00:08:27 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) disconnected.
+INFO 2026-07-15 00:08:27 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:2.2:1.0-video-index0) disconnected.
+INFO 2026-07-15 00:08:27 follower.py:229 my_awesome_follower_arm SOFollower disc
+onnected.
+INFO 2026-07-15 00:08:27 ls/utils.py:142 Exiting
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/evo-rlt-record", line 6, in <modul
+e>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/cli.
+py", line 159, in main
+    args.func(args)
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/runn
+er.py", line 1126, in run_full
+    record()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 652, in record
+    robot.connect()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 39, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/r
+obots/so_follower/so_follower.py", line 104, in connect
+    self.configure()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/r
+obots/so_follower/so_follower.py", line 156, in configure
+    with self.bus.torque_disabled():
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/contextlib.py", line 14
+4, in __exit__
+    next(self.gen)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 678, in torque_disabled
+    self.enable_torque(motors)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/feetech/feetech.py", line 308, in enable_torque
+    self.write("Torque_Enable", motor, TorqueMode.ENABLED.value, num_retry=num_r
+etry)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/decorators.py", line 29, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 1081, in write
+    self._write(addr, length, id_, int_value, num_retry=num_retry, raise_on_erro
+r=True, err_msg=err_msg)
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/m
+otors/motors_bus.py", line 1105, in _write
+    raise ConnectionError(f"{err_msg} {self.packet_handler.getTxRxResult(comm)}"
+)
+ConnectionError: Failed to write 'Torque_Enable' on id_=2 with '1' after 1 tries
+. [TxRxResult] Incorrect status packet!
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ evo-rlt-record full \
+>   --initial-source teleop \
+>   --setup-json configs/so101_two_cam_manifest.json \
+>   --task="Put the object into the target container." \
+>   --dataset-tag so101_pick_into_box_human_expert \
+>   --num-episodes 10 \
+>   --episode-time-s 3000 \
+>   --reset-time-s 0 \
+>   --fps 30 \
+>   --vcodec h264
+2026-07-15 00:09:02,687 INFO evo_rlt.adapters.lerobot.record.common: Single-arm
+teleop enabled: port=/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0
+2026-07-15 00:09:02,687 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower/
+my_awesome_follower_arm.json -> /tmp/record-full-k2yk4laj/my_awesome_follower_ar
+m.json
+2026-07-15 00:09:02,688 INFO evo_rlt.adapters.lerobot.record.common: Calibration
+ staged: /home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so101_le
+ader/my_awesome_leader_arm.json -> /tmp/record-leader-cal-ga31ppz3/my_awesome_le
+ader_arm.json
+2026-07-15 00:09:07,803 INFO root: Could not import realsense: No module named '
+pyrealsense2'
+INFO 2026-07-15 00:09:11 /backend.py:549 {'acp_inference': {'cfg_beta': 1.0, 'en
+able': False, 'use_cfg': False},
+ 'collector_policy_id_human': 0,
+ 'collector_policy_id_policy': 1,
+ 'communication_retry_interval_s': 0.1,
+ 'communication_retry_timeout_s': 2.0,
+ 'critical_phase_toggle_key': ' ',
+ 'dataset': {'encoder_queue_maxsize': 30,
+             'encoder_threads': None,
+             'episode_time_s': 3000,
+             'fps': 30,
+             'num_episodes': 10,
+             'num_image_writer_processes': 0,
+             'num_image_writer_threads_per_camera': 4,
+             'private': False,
+             'push_to_hub': False,
+             'rename_map': {},
+             'repo_id': 'local/teleop_full_000902',
+             'reset_time_s': 0,
+             'root': '/home/zty/catkin_ws/src/Evo-RLT/data/0715_so101_pick_into_
+box_human_expert/teleop_full_000902',
+             'single_task': 'Put the object into the target container.',
+             'streaming_encoding': True,
+             'tags': None,
+             'vcodec': 'h264',
+             'video': True,
+             'video_encoding_batch_size': 11},
+ 'default_episode_success': None,
+ 'display_compressed_images': False,
+ 'display_data': False,
+ 'display_ip': None,
+ 'display_port': None,
+ 'enable_collector_policy_id': True,
+ 'enable_critical_phase_labeling': False,
+ 'enable_episode_outcome_labeling': True,
+ 'episode_failure_key': 'f',
+ 'episode_success_key': 's',
+ 'intervention_state_machine_enabled': True,
+ 'intervention_toggle_key': 'i',
+ 'play_sounds': True,
+ 'policy': None,
+ 'policy_sync_parallel': True,
+ 'policy_sync_to_teleop': False,
+ 'require_episode_success_label': True,
+ 'resume': False,
+ 'rlt': {'ac_ckpt': '',
+         'actor_activation': 'relu',
+         'actor_hidden_dim': 256,
+         'actor_layer_norm': False,
+         'actor_num_layers': 3,
+         'actor_residual': True,
+         'chunk_exec_steps': 25,
+         'chunk_length': 10,
+         'critical_phase_toggle_key': 'p',
+         'default_reset_mode': 'full',
+         'deterministic': True,
+         'device': 'cuda',
+         'enable': False,
+         'end_failure_key': 'f',
+         'end_success_key': 's',
+         'image_only': False,
+         'intervention_action_blend_time_s': 0.0,
+         'phase_mode': 'manual',
+         'rl_phase_double_tap_window_s': 0.6,
+         'rl_phase_key': 'r',
+         'rl_phase_key_toggles_critical_phase': False,
+         'rl_phase_key_toggles_episode': False,
+         'rl_token_ckpt': '',
+         'rtc_action_queue_size_to_get_new_actions': None,
+         'rtc_enabled': True,
+         'rtc_execution_horizon': 10,
+         'rtc_max_guidance_weight': 10.0,
+         'rtc_prefix_attention_schedule': 'EXP',
+         'skip_prefix_recording': False,
+         'start_in_teleop': False,
+         'task_instruction': '',
+         'token_pool_size': 64,
+         'vla_model': '',
+         'vla_rtc_execution_horizon': None},
+ 'robot': {'calibration_dir': PosixPath('/tmp/record-full-k2yk4laj'),
+           'cameras': {'front': {'backend': <Cv2Backends.V4L2: 200>,
+                                 'color_mode': <ColorMode.RGB: 'rgb'>,
+                                 'fourcc': 'MJPG',
+                                 'fps': 30,
+                                 'height': 480,
+                                 'index_or_path': PosixPath('/dev/v4l/by-path/pc
+i-0000:04:00.4-usb-0:1.3:1.0-video-index0'),
+                                 'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                                 'warmup_s': 1,
+                                 'width': 640},
+                       'top': {'backend': <Cv2Backends.V4L2: 200>,
+                               'color_mode': <ColorMode.RGB: 'rgb'>,
+                               'fourcc': 'MJPG',
+                               'fps': 30,
+                               'height': 480,
+                               'index_or_path': PosixPath('/dev/v4l/by-path/pci-
+0000:04:00.4-usb-0:2.2:1.0-video-index0'),
+                               'rotation': <Cv2Rotation.NO_ROTATION: 0>,
+                               'warmup_s': 1,
+                               'width': 640}},
+           'disable_torque_on_disconnect': True,
+           'id': 'my_awesome_follower_arm',
+           'max_relative_target': None,
+           'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.4:1.0',
+           'use_degrees': True},
+ 'robot_config_file': None,
+ 'teleop': {'calibration_dir': PosixPath('/tmp/record-leader-cal-ga31ppz3'),
+            'id': 'my_awesome_leader_arm',
+            'port': '/dev/serial/by-path/pci-0000:04:00.4-usb-0:2.1:1.0',
+            'use_degrees': True},
+ 'teleop_r_key_episodes': False,
+ 'vla_ref': True}
+INFO 2026-07-15 00:09:11 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-15 00:09:11 eo_utils.py:108 Using video codec: h264
+INFO 2026-07-15 00:09:13 a_opencv.py:179 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) connected.
+INFO 2026-07-15 00:09:14 a_opencv.py:179 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:2.2:1.0-video-index0) connected.
+INFO 2026-07-15 00:09:14 follower.py:105 my_awesome_follower_arm SOFollower conn
+ected.
+INFO 2026-07-15 00:09:14 so_leader.py:78 my_awesome_leader_arm SOLeader connecte
+d.
+WARNING 2026-07-15 00:09:14 d/runner.py:495 Using terminal keyboard controls ove
+r the current TTY. Keep this terminal focused for intervention/success/failure/R
+LT keys to be captured.
+INFO 2026-07-15 00:09:14 ls/utils.py:142 Recording episode 0
+'s' key pressed. Marking episode as success and exiting loop...
+INFO 2026-07-15 00:09:29 ord/loop.py:870 [Timing] Wrote 443 frame timings to /tm
+p/frame_timing.csv
+INFO 2026-07-15 00:09:29 ord/loop.py:874 [Recovery] Wrote 443 frames to recovery
+_frames.jsonl
+INFO 2026-07-15 00:09:29 ls/utils.py:142 Reset the environment
+INFO 2026-07-15 00:09:29 ord/loop.py:870 [Timing] Wrote 0 frame timings to /tmp/
+frame_timing.csv
+Map: 100%|██████████████████████████| 443/443 [00:00<00:00, 2050.24 examples/s]
+[libx264 @ 0x7f8b80001940] frame I:222   Avg QP:26.89  size:  8114
+[libx264 @ 0x7f8b80001940] frame P:221   Avg QP:30.10  size:   351
+[libx264 @ 0x7f8b80001940] mb I  I16..4: 27.8% 66.4%  5.7%
+[libx264 @ 0x7f8b80001940] mb P  I16..4:  1.7%  1.9%  0.0%  P16..4:  5.5%  0.9%
+ 0.1%  0.0%  0.0%    skip:89.9%
+[libx264 @ 0x7f8b80001940] 8x8 transform intra:66.0% inter:81.2%
+[libx264 @ 0x7f8b80001940] coded y,uvDC,uvAC intra: 35.2% 34.8% 10.4% inter: 0.2
+% 0.3% 0.0%
+[libx264 @ 0x7f8b80001940] i16 v,h,dc,p: 40% 21% 21% 18%
+[libx264 @ 0x7f8b80001940] i8 v,h,dc,ddl,ddr,vr,hd,vl,hu: 31% 16% 34%  4%  3%  3
+%  3%  3%  4%
+[libx264 @ 0x7f8b80001940] i4 v,h,dc,ddl,ddr,vr,hd,vl,hu: 27% 16% 26%  4%  6%  5
+%  6%  5%  4%
+[libx264 @ 0x7f8b80001940] i8c dc,h,v,p: 75% 10% 13%  1%
+[libx264 @ 0x7f8b80001940] Weighted P-Frames: Y:0.9% UV:0.0%
+[libx264 @ 0x7f8b80001940] kb/s:1017.91
+[libx264 @ 0x7f8b7c001940] frame I:222   Avg QP:25.94  size:  5689
+[libx264 @ 0x7f8b7c001940] frame P:221   Avg QP:27.69  size:   638
+[libx264 @ 0x7f8b7c001940] mb I  I16..4: 34.6% 62.5%  2.9%
+[libx264 @ 0x7f8b7c001940] mb P  I16..4:  5.9%  5.1%  0.0%  P16..4:  8.8%  1.1%
+ 0.1%  0.0%  0.0%    skip:78.9%
+[libx264 @ 0x7f8b7c001940] 8x8 transform intra:60.9% inter:90.0%
+[libx264 @ 0x7f8b7c001940] coded y,uvDC,uvAC intra: 27.8% 28.6% 2.2% inter: 0.5%
+ 0.9% 0.0%
+[libx264 @ 0x7f8b7c001940] i16 v,h,dc,p: 32% 30% 29%  9%
+[libx264 @ 0x7f8b7c001940] i8 v,h,dc,ddl,ddr,vr,hd,vl,hu: 31% 18% 39%  3%  2%  2
+%  2%  1%  3%
+[libx264 @ 0x7f8b7c001940] i4 v,h,dc,ddl,ddr,vr,hd,vl,hu: 30% 15% 24%  7%  5%  4
+%  5%  3%  5%
+[libx264 @ 0x7f8b7c001940] i8c dc,h,v,p: 78% 11% 10%  0%
+[libx264 @ 0x7f8b7c001940] Weighted P-Frames: Y:4.5% UV:0.0%
+[libx264 @ 0x7f8b7c001940] kb/s:760.52
+INFO 2026-07-15 00:09:29 ls/utils.py:142 Recording episode 1
+[libx264 @ 0x7f8b7c003080] using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AV
+X FMA3 BMI2 AVX2
+[libx264 @ 0x7f8b7c003080] profile High, level 3.0, 4:2:0, 8-bit
+[libx264 @ 0x7f8b7c003080] 264 - core 165 - H.264/MPEG-4 AVC codec - Copyleft 20
+03-2025 - http://www.videolan.org/x264.html - options: cabac=1 ref=3 deblock=1:0
+:0 analyse=0x3:0x113 me=hex subme=7 psy=1 psy_rd=1.00:0.00 mixed_ref=1 me_range=
+16 chroma_me=1 trellis=1 8x8dct=1 cqm=0 deadzone=21,11 fast_pskip=1 chroma_qp_of
+fset=-2 threads=7 lookahead_threads=7 sliced_threads=1 slices=7 nr=0 decimate=1
+interlaced=0 bluray_compat=0 constrained_intra=0 bframes=1 b_pyramid=0 b_adapt=1
+ b_bias=0 direct=1 weightb=1 open_gop=0 weightp=2 keyint=2 keyint_min=1 scenecut
+=40 intra_refresh=0 rc_lookahead=2 rc=crf mbtree=1 crf=30.0 qcomp=0.60 qpmin=0 q
+pmax=69 qpstep=4 ip_ratio=1.40 aq=1:1.00
+[libx264 @ 0x7f8b80d83ac0] using cpu capabilities: MMX2 SSE2Fast SSSE3 SSE4.2 AV
+X FMA3 BMI2 AVX2
+[libx264 @ 0x7f8b80d83ac0] profile High, level 3.0, 4:2:0, 8-bit
+[libx264 @ 0x7f8b80d83ac0] 264 - core 165 - H.264/MPEG-4 AVC codec - Copyleft 20
+03-2025 - http://www.videolan.org/x264.html - options: cabac=1 ref=3 deblock=1:0
+:0 analyse=0x3:0x113 me=hex subme=7 psy=1 psy_rd=1.00:0.00 mixed_ref=1 me_range=
+16 chroma_me=1 trellis=1 8x8dct=1 cqm=0 deadzone=21,11 fast_pskip=1 chroma_qp_of
+fset=-2 threads=7 lookahead_threads=7 sliced_threads=1 slices=7 nr=0 decimate=1
+interlaced=0 bluray_compat=0 constrained_intra=0 bframes=1 b_pyramid=0 b_adapt=1
+ b_bias=0 direct=1 weightb=1 open_gop=0 weightp=2 keyint=2 keyint_min=1 scenecut
+=40 intra_refresh=0 rc_lookahead=2 rc=crf mbtree=1 crf=30.0 qcomp=0.60 qpmin=0 q
+pmax=69 qpstep=4 ip_ratio=1.40 aq=1:1.00
+[libx264 @ 0x7f8b80d83ac0] frame I:441   Avg QP:26.63  size:  8063
+[libx264 @ 0x7f8b80d83ac0] frame P:441   Avg QP:29.42  size:   321
+[libx264 @ 0x7f8b80d83ac0] mb I  I16..4: 32.7% 61.7%  5.6%
+[libx264 @ 0x7f8b80d83ac0] mb P  I16..4:  1.5%  1.4%  0.0%  P16..4:  5.0%  0.9%
+ 0.1%  0.0%  0.0%    skip:91.1%
+[libx264 @ 0x7f8b80d83ac0] 8x8 transform intra:61.3% inter:83.9%
+[libx264 @ 0x7f8b80d83ac0] coded y,uvDC,uvAC intra: 34.3% 37.5% 10.6% inter: 0.1
+% 0.3% 0.0%
+[libx264 @ 0x7f8b80d83ac0] i16 v,h,dc,p: 42% 20% 22% 17%
+[libx264 @ 0x7f8b80d83ac0] i8 v,h,dc,ddl,ddr,vr,hd,vl,hu: 29% 17% 34%  4%  3%  4
+%  3%  3%  4%
+[libx264 @ 0x7f8b80d83ac0] i4 v,h,dc,ddl,ddr,vr,hd,vl,hu: 27% 17% 26%  4%  6%  5
+%  5%  5%  4%
+[libx264 @ 0x7f8b80d83ac0] i8c dc,h,v,p: 72% 11% 15%  1%
+[libx264 @ 0x7f8b80d83ac0] Weighted P-Frames: Y:0.0% UV:0.0%
+[libx264 @ 0x7f8b80d83ac0] kb/s:1006.10
+[libx264 @ 0x7f8b7c003080] frame I:441   Avg QP:25.57  size:  5336
+[libx264 @ 0x7f8b7c003080] frame P:441   Avg QP:27.28  size:   531
+[libx264 @ 0x7f8b7c003080] mb I  I16..4: 36.3% 61.1%  2.6%
+[libx264 @ 0x7f8b7c003080] mb P  I16..4:  5.0%  4.0%  0.0%  P16..4:  7.5%  0.8%
+ 0.1%  0.0%  0.0%    skip:82.6%
+[libx264 @ 0x7f8b7c003080] 8x8 transform intra:59.7% inter:93.0%
+[libx264 @ 0x7f8b7c003080] coded y,uvDC,uvAC intra: 27.4% 25.2% 1.3% inter: 0.3%
+ 0.6% 0.0%
+[libx264 @ 0x7f8b7c003080] i16 v,h,dc,p: 30% 34% 27%  9%
+[libx264 @ 0x7f8b7c003080] i8 v,h,dc,ddl,ddr,vr,hd,vl,hu: 30% 19% 41%  3%  1%  1
+%  1%  1%  2%
+[libx264 @ 0x7f8b7c003080] i4 v,h,dc,ddl,ddr,vr,hd,vl,hu: 35% 14% 25%  5%  4%  5
+%  4%  3%  4%
+[libx264 @ 0x7f8b7c003080] i8c dc,h,v,p: 79% 11% 10%  0%
+[libx264 @ 0x7f8b7c003080] Weighted P-Frames: Y:2.7% UV:0.0%
+[libx264 @ 0x7f8b7c003080] kb/s:704.02
+INFO 2026-07-15 00:10:00 ls/utils.py:142 Stop recording
+INFO 2026-07-15 00:10:01 /backend.py:936 To inspect the recorded dataset, run:
+  lerobot-dataset-report --dataset local/teleop_full_000902
+INFO 2026-07-15 00:10:01 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:1.3:1.0-video-index0) disconnected.
+INFO 2026-07-15 00:10:01 a_opencv.py:592 OpenCVCamera(/dev/v4l/by-path/pci-0000:
+04:00.4-usb-0:2.2:1.0-video-index0) disconnected.
+INFO 2026-07-15 00:10:01 follower.py:229 my_awesome_follower_arm SOFollower disc
+onnected.
+INFO 2026-07-15 00:10:01 o_leader.py:155 my_awesome_leader_arm SOLeader disconne
+cted.
+INFO 2026-07-15 00:10:01 ls/utils.py:142 Exiting
+Traceback (most recent call last):
+  File "/home/zty/miniconda3/envs/evo-rlt/bin/evo-rlt-record", line 6, in <modul
+e>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/cli.
+py", line 159, in main
+    args.func(args)
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/runn
+er.py", line 1126, in run_full
+    record()
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/c
+onfigs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 901, in record
+    _record_episode()
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/back
+end.py", line 754, in _record_episode
+    record_loop(
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/d
+atasets/image_writer.py", line 32, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/zty/catkin_ws/src/Evo-RLT/src/evo_rlt/adapters/lerobot/record/loop
+.py", line 836, in record_loop
+    precise_sleep(max(1 / fps - dt_s, 0.0))
+  File "/home/zty/miniconda3/envs/evo-rlt/lib/python3.12/site-packages/lerobot/u
+tils/robot_utils.py", line 55, in precise_sleep
+    time.sleep(seconds)
+KeyboardInterrupt
+
+(evo-rlt) zty@honor:~/catkin_ws/src/Evo-RLT$ tmux capture-pane -pS - > tmux_hist
+ory.log
+

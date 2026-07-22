@@ -132,6 +132,10 @@ def build_parser() -> argparse.ArgumentParser:
     full.add_argument("--pedal-outcome", action=argparse.BooleanOptionalAction, default=False)
     full.add_argument("--episode-outcome-key", default="r")
     full.add_argument("--double-tap-window-s", type=float, default=0.6)
+    full.add_argument("--auto-reset-pose", action=argparse.BooleanOptionalAction, default=True)
+    full.add_argument("--reset-pose-path", default=None)
+    full.add_argument("--reset-pose-duration-s", type=float, default=3.0)
+    full.add_argument("--reset-pose-recapture", action=argparse.BooleanOptionalAction, default=True)
     full.set_defaults(func=run_full)
 
     live = subparsers.add_parser("live", help="Run policy live on the robot without saving a dataset.")

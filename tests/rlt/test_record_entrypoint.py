@@ -19,6 +19,7 @@ from evo_rlt.adapters.lerobot.record.runner import (
     _patch_double_tap_episode_outcome_listener,
     _policy_dataset_prefix,
     _patch_skip_policyless_reset_loop,
+    build_auto_reset_pose_argv,
     build_default_collect_record_argv,
     build_segment_record_argv,
 )
@@ -586,6 +587,34 @@ def test_full_vla_pedal_outcome_parser():
     assert args.phase_mode == "always_vla"
     assert args.chunk_exec_steps == 25
     assert args.reset_time_s == 0
+    assert args.auto_reset_pose is True
+    assert args.reset_pose_recapture is True
+
+
+def test_full_auto_reset_pose_argv_defaults_to_enabled():
+    args = SimpleNamespace(
+        auto_reset_pose=True,
+        reset_pose_duration_s=3.0,
+        reset_pose_path=None,
+        reset_pose_recapture=True,
+    )
+
+    assert build_auto_reset_pose_argv(args) == [
+        "--auto_reset_pose=true",
+        "--reset_pose_duration_s=3.0",
+        "--reset_pose_recapture=true",
+    ]
+
+
+def test_full_auto_reset_pose_argv_can_be_disabled():
+    args = SimpleNamespace(
+        auto_reset_pose=False,
+        reset_pose_duration_s=3.0,
+        reset_pose_path=None,
+        reset_pose_recapture=True,
+    )
+
+    assert build_auto_reset_pose_argv(args) == ["--auto_reset_pose=false"]
 
 
 def test_full_vla_dry_run_accepts_headless_default_episode_success(tmp_path, capsys):
@@ -633,7 +662,10 @@ def test_full_vla_dry_run_accepts_headless_default_episode_success(tmp_path, cap
 
     runner.run_full(args)
 
-    assert "--default_episode_success=success" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "--default_episode_success=success" in out
+    assert "--auto_reset_pose=true" in out
+    assert "--reset_pose_recapture=true" in out
 
 
 def test_evo_rlt_recording_does_not_import_lerobot_fork_only_modules():

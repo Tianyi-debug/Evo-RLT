@@ -129,11 +129,13 @@ from lerobot.utils.import_utils import register_third_party_plugins
 from evo_rlt.adapters.lerobot.record.annotations import (
     COLLECTOR_HUMAN,
     COLLECTOR_POLICY,
+    EPISODE_FAILURE,
     RLT_COLLECTOR_POLICY_ID_TO_NAME,
     infer_collector_policy_version,
     normalize_episode_success_label,
     resolve_episode_success_label,
 )
+from evo_rlt.adapters.lerobot.record.reset_pose import EpisodeResetPoseController
 from lerobot.utils.device_utils import get_safe_torch_device
 from lerobot.utils.utils import (
     init_logging,
@@ -300,6 +302,16 @@ class RecordConfig:
     default_episode_success: str | None = None
     # If True, require explicit or default episode labels before saving.
     require_episode_success_label: bool = False
+    # Return the robot to a stored episode-initial pose after success, failure, or rerecord.
+    auto_reset_pose: bool = False
+    # Optional JSON pose path. Defaults to HF_LEROBOT_HOME/failure_reset_pose/<robot_type>_<robot_id>.json.
+    reset_pose_path: str | None = None
+    # Seconds used for the smooth joint-space return to the stored reset pose.
+    reset_pose_duration_s: float = 3.0
+    # Capture the current robot pose on first run when `reset_pose_path` does not exist.
+    reset_pose_capture_if_missing: bool = True
+    # Re-capture the reset pose at startup even if `reset_pose_path` already exists.
+    reset_pose_recapture: bool = False
     # Unified schema always records step-level collector source ids.
     enable_collector_policy_id: bool = True
     # Numeric code used when the executed action comes from the primary policy.
@@ -407,6 +419,8 @@ class RecordConfig:
 
         if self.default_episode_success is not None:
             self.default_episode_success = normalize_episode_success_label(self.default_episode_success)
+        if self.reset_pose_duration_s <= 0:
+            raise ValueError("`reset_pose_duration_s` must be > 0.")
 
         if not self.enable_collector_policy_id:
             raise ValueError("`enable_collector_policy_id` must stay true for the unified recording schema.")
@@ -585,6 +599,18 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     policy_sync_executor = None
     critical_phase_tracker = None
     intervention_tracker = None
+    reset_pose_controller = (
+        EpisodeResetPoseController(
+            cfg,
+            pose_path=cfg.reset_pose_path,
+            duration_s=cfg.reset_pose_duration_s,
+            capture_if_missing=cfg.reset_pose_capture_if_missing,
+            recapture=cfg.reset_pose_recapture,
+            capture_fps=cfg.dataset.fps,
+        )
+        if cfg.auto_reset_pose
+        else None
+    )
 
     try:
         if cfg.resume:
@@ -655,6 +681,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         on_record_connected = getattr(cfg, "_on_record_connected", None)
         if callable(on_record_connected):
             on_record_connected(robot, teleop)
+        if reset_pose_controller is not None:
+            reset_pose_controller.on_record_connected(robot, teleop)
 
         if cfg.policy_sync_to_teleop:
             if cfg.policy is None:
@@ -812,10 +840,21 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 )
             return episode_success
 
+        def _resolve_rerecord_episode_success() -> str | None:
+            if not cfg.enable_episode_outcome_labeling:
+                return EPISODE_FAILURE
+            return resolve_episode_success_label(
+                explicit_label=events.get("episode_outcome"),
+                default_label=cfg.default_episode_success or EPISODE_FAILURE,
+                require_label=False,
+            )
+
         def _notify_episode_outcome(episode_success: str | None) -> None:
             on_episode_outcome = getattr(cfg, "_on_record_episode_outcome", None)
             if callable(on_episode_outcome):
                 on_episode_outcome(robot, teleop, episode_success)
+            if reset_pose_controller is not None:
+                reset_pose_controller.on_episode_outcome(robot, teleop, episode_success)
 
         def _should_run_reset_loop(recorded_episodes: int) -> bool:
             next_episode_needed = recorded_episodes < cfg.dataset.num_episodes - 1
@@ -900,6 +939,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 _reset_policy_for_episode()
                 _record_episode()
                 _finish_episode_trackers()
+                if events["rerecord_episode"]:
+                    episode_success = _resolve_rerecord_episode_success()
+                    _notify_episode_outcome(episode_success)
+                    _run_reset_loop_if_needed(recorded_episodes)
+                    recorded_episodes = _finish_recorded_episode(recorded_episodes, episode_success)
+                    continue
                 episode_success = _resolve_current_episode_success()
                 _notify_episode_outcome(episode_success)
                 _run_reset_loop_if_needed(recorded_episodes)

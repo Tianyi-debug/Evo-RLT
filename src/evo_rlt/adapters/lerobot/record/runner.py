@@ -1034,6 +1034,19 @@ def build_reset_time_argv(args: argparse.Namespace) -> list[str]:
     return [f"--dataset.reset_time_s={args.reset_time_s}"]
 
 
+def build_auto_reset_pose_argv(args: argparse.Namespace) -> list[str]:
+    if not getattr(args, "auto_reset_pose", False):
+        return ["--auto_reset_pose=false"]
+    argv = [
+        "--auto_reset_pose=true",
+        f"--reset_pose_duration_s={args.reset_pose_duration_s}",
+        f"--reset_pose_recapture={'true' if args.reset_pose_recapture else 'false'}",
+    ]
+    if args.reset_pose_path is not None:
+        argv.append(f"--reset_pose_path={args.reset_pose_path}")
+    return argv
+
+
 def print_segment_summary(args: argparse.Namespace, paths) -> None:
     vla_horizon = args.vla_rtc_execution_horizon or args.rtc_execution_horizon
     print(f"\nDataset: {paths.dataset_name} -> {paths.dataset_root}")
@@ -1096,6 +1109,7 @@ def run_full(args: argparse.Namespace) -> None:
                 vcodec=args.vcodec,
             ),
             *build_reset_time_argv(args),
+            *build_auto_reset_pose_argv(args),
             *build_rtc_argv(
                 enabled=args.rtc,
                 execution_horizon=args.rtc_execution_horizon,
