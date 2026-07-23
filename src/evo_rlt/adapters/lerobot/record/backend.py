@@ -978,6 +978,24 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             if not dataset:
                 return
             dataset.finalize()
+            try:
+                from evo_rlt.adapters.lerobot.dataset_stats import recompute_numeric_dataset_stats
+
+                result = recompute_numeric_dataset_stats(dataset.root, backup=False, write=True)
+                dataset.meta.stats = result.stats
+                for key, validation in result.validation.items():
+                    logging.info(
+                        "%s global q01/q99 outside coverage (%% by dim): %s",
+                        key,
+                        validation.outside_q01_q99_pct.tolist(),
+                    )
+            except Exception:
+                logging.exception(
+                    "Failed to recompute exact global numeric dataset stats. "
+                    "The recording is preserved; repair it with "
+                    "`evo-rlt-recompute-dataset-stats --dataset-root %s` before Pi0.5/RLT training.",
+                    dataset.root,
+                )
             logging.info(
                 "To inspect the recorded dataset, run:\n  lerobot-dataset-report --dataset %s",
                 dataset.repo_id,

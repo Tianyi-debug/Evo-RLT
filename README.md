@@ -488,6 +488,33 @@ single tap    success, end current episode, start next episode
 double tap    failure, end current episode, start next episode
 ```
 
+### Dataset statistics after recording and aggregation
+
+`evo-rlt-record` recomputes exact full-dataset statistics for every numeric parquet feature after
+LeRobot finalizes a recording. Existing image/video statistics are preserved. If the automatic
+step reports an error, repair a completed local dataset with:
+
+```bash
+python -m evo_rlt.cli.recompute_dataset_stats \
+  --dataset-root <LOCAL_DATASET_ROOT>
+```
+
+The command backs up the old `meta/stats.json` by default. Use `--check-only` to validate and
+preview q01/q99 coverage without changing the dataset.
+
+For local aggregation, use the Evo-RLT wrapper so that the merged dataset is repaired
+automatically after LeRobot copies its data and metadata:
+
+```bash
+python -m evo_rlt.cli.aggregate_datasets \
+  --source-root <SOURCE_DATASET_1> \
+  --source-root <SOURCE_DATASET_2> \
+  --output-root <MERGED_DATASET>
+```
+
+Running LeRobot's aggregation tool directly bypasses this wrapper; run
+`evo_rlt.cli.recompute_dataset_stats` on its output before quantile-normalized training.
+
 <a id="repository-layout"></a>
 
 ## 🗂️ Repository Layout
