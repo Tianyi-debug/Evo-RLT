@@ -8,12 +8,29 @@ from torch import nn
 
 from evo_rlt.adapters.lerobot.policies.vla_backbone import (
     _pi05_checkpoint_is_device_direct_compatible,
+    _resolve_distributed_cuda_device,
     extract_prefix_hidden,
     get_vla_prefix_target,
     infer_num_image_tokens,
     infer_vla_token_dim,
     infer_vla_type,
 )
+
+
+def test_resolve_cuda_device_without_local_rank(monkeypatch):
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+
+    assert _resolve_distributed_cuda_device("cuda") == "cuda"
+    assert _resolve_distributed_cuda_device("cuda:3") == "cuda:3"
+    assert _resolve_distributed_cuda_device("cpu") == "cpu"
+    assert _resolve_distributed_cuda_device(None) is None
+
+
+def test_resolve_cuda_device_with_local_rank(monkeypatch):
+    monkeypatch.setenv("LOCAL_RANK", "2")
+
+    assert _resolve_distributed_cuda_device("cuda") == "cuda:2"
+    assert _resolve_distributed_cuda_device("cuda:0") == "cuda:0"
 
 
 def test_infer_vla_type_from_config_json(tmp_path):

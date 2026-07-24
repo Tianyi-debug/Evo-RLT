@@ -14,6 +14,22 @@ SUPPORTED_VLA_TYPES = {"pi05", "smolvla"}
 log = logging.getLogger(__name__)
 
 
+def _resolve_distributed_cuda_device(device: str | None) -> str | None:
+    """Map a generic cuda device to this process's local rank under DDP."""
+    if device != "cuda":
+        return device
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is None:
+        return device
+    try:
+        rank_idx = int(local_rank)
+    except ValueError:
+        return device
+    if rank_idx < 0:
+        return device
+    return f"cuda:{rank_idx}"
+
+
 def normalize_vla_type(vla_type: str | None) -> str:
     """Normalize CLI/config aliases into the LeRobot policy type used here."""
     if vla_type is None or vla_type == "":
@@ -177,6 +193,9 @@ def load_vla_policy(
 ) -> nn.Module:
     """Load a supported LeRobot VLA policy without importing every backend up front."""
     resolved_type = infer_vla_type(pretrained_path, vla_type)
+    resolved_device = _resolve_distributed_cuda_device(device)
+    if resolved_device != device:
+        log.info("Resolved distributed VLA device %s -> %s", device, resolved_device)
     if resolved_type == "pi05":
         from lerobot.policies.pi05.configuration_pi05 import PI05Config
         from lerobot.policies.pi05.modeling_pi05 import PI05Policy
@@ -184,8 +203,8 @@ def load_vla_policy(
         cfg = _load_config_from_dir(PI05Config, pretrained_path)
         if dtype is not None:
             cfg.dtype = dtype
-        if device is not None:
-            cfg.device = device
+        if resolved_device is not None:
+            cfg.device = resolved_device
         policy = None if revision is not None else _load_pi05_policy_device_direct(
             PI05Policy,
             cfg,
@@ -207,8 +226,8 @@ def load_vla_policy(
         from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
         cfg = _load_config_from_dir(SmolVLAConfig, pretrained_path)
-        if device is not None and hasattr(cfg, "device"):
-            cfg.device = device
+        if resolved_device is not None and hasattr(cfg, "device"):
+            cfg.device = resolved_device
         if dtype is not None and hasattr(cfg, "dtype"):
             cfg.dtype = dtype
         return SmolVLAPolicy.from_pretrained(
