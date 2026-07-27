@@ -7,6 +7,30 @@ import pytest
 import torch
 
 
+def test_transition_cache_v2_config_overrides_apply_before_policy_load(tmp_path):
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+    module.RLTokenPolicyConfig.ensure_registered()
+    module.RLTokenPolicyConfig(
+        vla_pretrained_path="/tmp/stale-vla",
+        device="cpu",
+    ).save_pretrained(tmp_path)
+
+    loaded = module.PreTrainedConfig.from_pretrained(
+        tmp_path,
+        cli_overrides=[
+            "--vla_pretrained_path=/tmp/vla",
+            "--vla_type=smolvla",
+            "--tokenizer_path=/tmp/tokenizer",
+            "--norm_stats_path=/tmp/norm-stats.pt",
+        ],
+    )
+
+    assert loaded.vla_pretrained_path == "/tmp/vla"
+    assert loaded.vla_type == "smolvla"
+    assert loaded.tokenizer_path == "/tmp/tokenizer"
+    assert loaded.norm_stats_path == "/tmp/norm-stats.pt"
+
+
 def test_transition_cache_v2_passes_video_backend(monkeypatch, tmp_path):
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 
@@ -17,6 +41,12 @@ def test_transition_cache_v2_passes_video_backend(monkeypatch, tmp_path):
             captured.update(kwargs)
             self.num_episodes = 0
             self.meta = SimpleNamespace(episodes=None)
+
+    class FakeMetadata:
+        fps = 20
+
+        def __init__(self, **kwargs):
+            captured["metadata_kwargs"] = kwargs
 
     class FakePolicy:
         config = SimpleNamespace(
@@ -48,7 +78,19 @@ def test_transition_cache_v2_passes_video_backend(monkeypatch, tmp_path):
             pass
 
     monkeypatch.setattr(module, "LeRobotDataset", FakeDataset)
-    monkeypatch.setattr(module.RLTokenPolicy, "from_pretrained", lambda path: FakePolicy())
+    monkeypatch.setattr(module, "LeRobotDatasetMetadata", FakeMetadata)
+
+    def load_config(path, cli_overrides):
+        captured["config_path"] = path
+        captured["config_overrides"] = cli_overrides
+        return FakePolicy.config
+
+    monkeypatch.setattr(module.PreTrainedConfig, "from_pretrained", load_config)
+    monkeypatch.setattr(
+        module.RLTokenPolicy,
+        "from_pretrained",
+        lambda path, config: FakePolicy(),
+    )
     monkeypatch.setattr(module, "PrefixOutputCapture", FakeCapture)
     monkeypatch.setattr(module, "make_rlt_token_pre_post_processors", lambda config: (object(), object()))
     monkeypatch.setattr(
@@ -64,6 +106,12 @@ def test_transition_cache_v2_passes_video_backend(monkeypatch, tmp_path):
             "/tmp/rl-token",
             "--vla-pretrained-path",
             "/tmp/vla",
+            "--vla-type",
+            "smolvla",
+            "--tokenizer-path",
+            "/tmp/tokenizer",
+            "--norm-stats-path",
+            "/tmp/norm-stats.pt",
             "--output-dir",
             str(tmp_path),
             "--max-episodes",
@@ -76,6 +124,18 @@ def test_transition_cache_v2_passes_video_backend(monkeypatch, tmp_path):
     module.main()
 
     assert captured["video_backend"] == "video_reader"
+    assert captured["delta_timestamps"]["action"][1] == pytest.approx(0.05)
+    assert captured["metadata_kwargs"] == {
+        "repo_id": "local/demo",
+        "root": "/tmp/demo",
+    }
+    assert captured["config_path"] == "/tmp/rl-token"
+    assert captured["config_overrides"] == [
+        "--vla_pretrained_path=/tmp/vla",
+        "--vla_type=smolvla",
+        "--tokenizer_path=/tmp/tokenizer",
+        "--norm_stats_path=/tmp/norm-stats.pt",
+    ]
 
 
 def test_transition_cache_v2_semantic_builder_uses_exec_action_c_step_and_reward():
@@ -90,7 +150,7 @@ def test_transition_cache_v2_semantic_builder_uses_exec_action_c_step_and_reward
     exec_chunks[0] = 100.0
     exec_chunks[1] = 200.0
 
-    transitions = module._encoded_episode_to_transition_dicts(
+    transitions = module._encoded_episode_to_transitions(
         state_vecs=state_vecs,
         ref_chunks=ref_chunks,
         exec_chunks=exec_chunks,
@@ -103,16 +163,16 @@ def test_transition_cache_v2_semantic_builder_uses_exec_action_c_step_and_reward
     )
 
     assert len(transitions) == 2
-    assert torch.equal(transitions[0]["exec_chunk"], exec_chunks[0])
-    assert torch.equal(transitions[0]["ref_chunk"], ref_chunks[0])
-    assert not torch.equal(transitions[0]["exec_chunk"], transitions[0]["ref_chunk"])
-    assert torch.equal(transitions[0]["next_state_vec"], state_vecs[3])
-    assert torch.equal(transitions[1]["next_state_vec"], state_vecs[4])
-    assert transitions[0]["done"].item() == 0.0
-    assert transitions[1]["done"].item() == 1.0
-    assert torch.equal(transitions[0]["reward_seq"], torch.zeros(C))
-    assert torch.equal(transitions[1]["reward_seq"], torch.tensor([0.0, 0.0, 1.0]))
-    assert transitions[1]["episode_id"].item() == 7
+    assert torch.equal(transitions[0].exec_chunk, exec_chunks[0])
+    assert torch.equal(transitions[0].ref_chunk, ref_chunks[0])
+    assert not torch.equal(transitions[0].exec_chunk, transitions[0].ref_chunk)
+    assert torch.equal(transitions[0].next_state_vec, state_vecs[3])
+    assert torch.equal(transitions[1].next_state_vec, state_vecs[4])
+    assert transitions[0].done.item() == 0.0
+    assert transitions[1].done.item() == 1.0
+    assert torch.equal(transitions[0].reward_seq, torch.zeros(C))
+    assert torch.equal(transitions[1].reward_seq, torch.tensor([0.0, 0.0, 1.0]))
+    assert transitions[1].episode_id.item() == 7
 
 
 def test_transition_cache_v2_semantic_builder_zero_reward_on_failure():
@@ -120,7 +180,7 @@ def test_transition_cache_v2_semantic_builder_zero_reward_on_failure():
 
     C = 3
     frame_indices = [0, 1, 2, 3, 4]
-    transitions = module._encoded_episode_to_transition_dicts(
+    transitions = module._encoded_episode_to_transitions(
         state_vecs=torch.randn(len(frame_indices), 4),
         ref_chunks=torch.randn(len(frame_indices), C, 2),
         exec_chunks=torch.randn(len(frame_indices), C, 2),
@@ -132,8 +192,8 @@ def test_transition_cache_v2_semantic_builder_zero_reward_on_failure():
         ep_id=0,
     )
 
-    assert transitions[-1]["done"].item() == 1.0
-    assert all(t["reward_seq"].sum().item() == pytest.approx(0.0) for t in transitions)
+    assert transitions[-1].done.item() == 1.0
+    assert all(t.reward_seq.sum().item() == pytest.approx(0.0) for t in transitions)
 
 
 def test_transition_cache_v2_extracts_preprocessed_exec_action():
@@ -163,6 +223,31 @@ def test_transition_cache_v2_reads_episode_success_metadata():
     assert module._episode_success_from_metadata(dataset, 1, "error") is False
 
 
+def test_transition_cache_v2_rejects_missing_episode_success_by_default(monkeypatch):
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_transition_cache_v2.py",
+            "--demo-dataset-repo-id",
+            "local/demo",
+            "--demo-dataset-root",
+            "/tmp/demo",
+            "--rl-token-policy-path",
+            "/tmp/rl-token",
+            "--vla-pretrained-path",
+            "/tmp/vla",
+            "--output-dir",
+            "/tmp/cache",
+        ],
+    )
+
+    args = module.parse_args()
+
+    assert args.missing_episode_success == "error"
+
+
 def test_transition_cache_v2_uses_cli_chunk_length_for_frame_indices(monkeypatch, tmp_path):
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 
@@ -184,6 +269,12 @@ def test_transition_cache_v2_uses_cli_chunk_length_for_frame_indices(monkeypatch
             captured["delta_timestamps"] = kwargs["delta_timestamps"]
             self.num_episodes = 1
             self.meta = SimpleNamespace(episodes=FakeEpisodes())
+
+    class FakeMetadata:
+        fps = 25
+
+        def __init__(self, **kwargs):
+            pass
 
     class FakePolicy:
         config = SimpleNamespace(
@@ -219,7 +310,17 @@ def test_transition_cache_v2_uses_cli_chunk_length_for_frame_indices(monkeypatch
         return []
 
     monkeypatch.setattr(module, "LeRobotDataset", FakeDataset)
-    monkeypatch.setattr(module.RLTokenPolicy, "from_pretrained", lambda path: FakePolicy())
+    monkeypatch.setattr(module, "LeRobotDatasetMetadata", FakeMetadata)
+    monkeypatch.setattr(
+        module.PreTrainedConfig,
+        "from_pretrained",
+        lambda path, cli_overrides: FakePolicy.config,
+    )
+    monkeypatch.setattr(
+        module.RLTokenPolicy,
+        "from_pretrained",
+        lambda path, config: FakePolicy(),
+    )
     monkeypatch.setattr(module, "PrefixOutputCapture", FakeCapture)
     monkeypatch.setattr(module, "make_rlt_token_pre_post_processors", lambda config: (object(), object()))
     monkeypatch.setattr(module, "_encode_episode", fake_encode_episode)
@@ -251,5 +352,5 @@ def test_transition_cache_v2_uses_cli_chunk_length_for_frame_indices(monkeypatch
 
     module.main()
 
-    assert captured["delta_timestamps"]["action"] == [i / 30.0 for i in range(10)]
+    assert captured["delta_timestamps"]["action"] == [i / 25.0 for i in range(10)]
     assert captured["frame_indices"] == [0, 2, 3, 4, 6, 8, 10, 12, 13]

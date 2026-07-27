@@ -75,6 +75,26 @@ def test_save_load_transition_cache(tmp_path):
         assert found, f"Loaded state {i} not found in originals"
 
 
+def test_save_transition_cache_replaces_atomically(monkeypatch, tmp_path):
+    final_path = tmp_path / "chunk_transitions_train.pt"
+    tmp_cache_path = tmp_path / ".chunk_transitions_train.pt.tmp"
+    captured = {}
+
+    def fake_save(data, path):
+        captured["data"] = data
+        captured["path"] = path
+        path.write_bytes(b"new-cache")
+
+    monkeypatch.setattr(torch, "save", fake_save)
+
+    save_transition_cache([], tmp_path, split="train")
+
+    assert captured["data"] == []
+    assert captured["path"] == tmp_cache_path
+    assert final_path.read_bytes() == b"new-cache"
+    assert not tmp_cache_path.exists()
+
+
 def test_build_transitions_basic():
     """build_transitions_from_demos requires a demo loader and agent.
 

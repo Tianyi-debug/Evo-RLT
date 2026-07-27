@@ -23,12 +23,18 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader, Subset
 
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+
+from evo_rlt.adapters.lerobot.offline_dataset import (
+    _encoded_to_transitions,
+    build_overlap_frame_indices,
+    save_transition_cache,
+)
 from evo_rlt.adapters.lerobot.policies.action_modifier import PrefixOutputCapture
 from evo_rlt.adapters.lerobot.policies.configuration_rlt_token import RLTokenPolicyConfig
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_token import RLTokenPolicy
 from evo_rlt.adapters.lerobot.policies.processor_rlt_token import make_rlt_token_pre_post_processors
-from evo_rlt.adapters.lerobot.offline_dataset import _encoded_to_transitions, build_overlap_frame_indices
 from evo_rlt.core.interfaces import TRANSITION_SOURCE_DEMO, ChunkTransition
 
 
@@ -43,6 +49,11 @@ def parse_args() -> argparse.Namespace:
                    help="VLA backbone type. Defaults to the type saved in the RL-token checkpoint.")
     p.add_argument("--tokenizer-path", default=None,
                    help="Tokenizer repo id or local snapshot path for the SFT preprocessor.")
+    p.add_argument(
+        "--norm-stats-path",
+        default=None,
+        help="RL Token normalization stats override for relocated checkpoints.",
+    )
     p.add_argument("--output-dir", required=True)
     p.add_argument("--task-instruction", default="screw")
     p.add_argument("--chunk-length", type=int, default=10)
@@ -63,10 +74,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--missing-episode-success",
         choices=["success", "failure", "error"],
-        default="success",
+        default="error",
         help=(
-            "Fallback when dataset metadata lacks episode_success. "
-            "Use 'error' for strict relabeled datasets."
+            "Policy when dataset metadata lacks episode_success. "
+            "The default is strict; use 'success' only for verified all-success legacy datasets."
         ),
     )
     return p.parse_args()
@@ -148,24 +159,7 @@ def _extract_exec_chunk(preprocessed: dict, chunk_length: int, action_dim: int) 
     return action[:, :chunk_length, :action_dim].detach().to("cpu")
 
 
-def _transition_to_dict(t: ChunkTransition) -> dict[str, Tensor]:
-    return {
-        "state_vec": t.state_vec,
-        "exec_chunk": t.exec_chunk,
-        "ref_chunk": t.ref_chunk,
-        "reward_seq": t.reward_seq,
-        "next_state_vec": t.next_state_vec,
-        "next_ref_chunk": t.next_ref_chunk,
-        "done": t.done,
-        "intervention": t.intervention,
-        "actual_steps": t.actual_steps,
-        "source": t.source,
-        "episode_id": t.episode_id,
-        "is_critical": t.is_critical,
-    }
-
-
-def _encoded_episode_to_transition_dicts(
+def _encoded_episode_to_transitions(
     state_vecs: Tensor,
     ref_chunks: Tensor,
     exec_chunks: Tensor,
@@ -175,7 +169,7 @@ def _encoded_episode_to_transition_dicts(
     frame_stride: int,
     episode_success: bool,
     ep_id: int,
-) -> list[dict[str, Tensor]]:
+) -> list[ChunkTransition]:
     if not (state_vecs.shape[0] == ref_chunks.shape[0] == exec_chunks.shape[0] == len(frame_indices)):
         raise ValueError(
             "encoded tensors and frame_indices must have matching first dimension: "
@@ -186,7 +180,7 @@ def _encoded_episode_to_transition_dicts(
         (state_vecs[i], ref_chunks[i], exec_chunks[i])
         for i in range(len(frame_indices))
     ]
-    transitions = _encoded_to_transitions(
+    return _encoded_to_transitions(
         encoded=encoded,
         frame_indices=frame_indices,
         episode_last_frame=episode_last_frame,
@@ -197,7 +191,6 @@ def _encoded_episode_to_transition_dicts(
         episode_id=ep_id,
         is_critical=1.0,
     )
-    return [_transition_to_dict(t) for t in transitions]
 
 
 def _encode_episode(
@@ -219,7 +212,7 @@ def _encode_episode(
     episode_last_frame: int,
     frame_stride: int,
     episode_success: bool,
-) -> list[dict[str, Tensor]]:
+) -> list[ChunkTransition]:
     """Encode sampled episode frames and build paper-style C-step transitions."""
     if not frame_indices:
         return []
@@ -267,7 +260,7 @@ def _encode_episode(
     ref_chunks_t = torch.cat(ref_chunks, dim=0)
     exec_chunks_t = torch.cat(exec_chunks, dim=0)
 
-    return _encoded_episode_to_transition_dicts(
+    return _encoded_episode_to_transitions(
         state_vecs=state_vecs_t,
         ref_chunks=ref_chunks_t,
         exec_chunks=exec_chunks_t,
@@ -280,11 +273,14 @@ def _encode_episode(
     )
 
 
-def _save_partial(out_dir: pathlib.Path, split: str, transitions: list, label: str) -> None:
+def _save_partial(
+    out_dir: pathlib.Path,
+    split: str,
+    transitions: list[ChunkTransition],
+    label: str,
+) -> None:
     path = out_dir / f"chunk_transitions_{split}.pt"
-    tmp = out_dir / f".chunk_transitions_{split}.tmp.pt"
-    torch.save(transitions, tmp)
-    tmp.replace(path)
+    save_transition_cache(transitions, out_dir, split)
     _log(f"  [{label}] checkpointed {len(transitions)} transitions -> {path.name}")
 
 
@@ -301,21 +297,35 @@ def main() -> None:
     _log(f"args: {vars(args)}")
     _log(f"load RLTokenPolicy from {args.rl_token_policy_path}")
     RLTokenPolicyConfig.ensure_registered()
-    policy = RLTokenPolicy.from_pretrained(args.rl_token_policy_path).to(args.device).eval()
-    cfg = policy.config
-    # Override the policy's recorded vla path so the preprocessor we load is the
-    # SFT VLA's, even if the RL Token ckpt was trained against a different one.
-    cfg.vla_pretrained_path = args.vla_pretrained_path
+    config_overrides = [f"--vla_pretrained_path={args.vla_pretrained_path}"]
     if args.vla_type is not None:
-        cfg.vla_type = args.vla_type
+        config_overrides.append(f"--vla_type={args.vla_type}")
     if args.tokenizer_path is not None:
-        cfg.tokenizer_path = args.tokenizer_path
+        config_overrides.append(f"--tokenizer_path={args.tokenizer_path}")
+    if args.norm_stats_path is not None:
+        config_overrides.append(f"--norm_stats_path={args.norm_stats_path}")
+    cfg = PreTrainedConfig.from_pretrained(
+        args.rl_token_policy_path,
+        cli_overrides=config_overrides,
+    )
+    policy = (
+        RLTokenPolicy.from_pretrained(
+            args.rl_token_policy_path,
+            config=cfg,
+        )
+        .to(args.device)
+        .eval()
+    )
 
     _log(f"load preprocessor from SFT VLA dir {args.vla_pretrained_path}")
     preprocessor, _ = make_rlt_token_pre_post_processors(config=cfg)
 
     _log(f"load dataset {args.demo_dataset_repo_id} root={args.demo_dataset_root}")
-    delta = {"action": [i / 30.0 for i in range(args.chunk_length)]}
+    metadata = LeRobotDatasetMetadata(
+        repo_id=args.demo_dataset_repo_id,
+        root=args.demo_dataset_root,
+    )
+    delta = {"action": [i / metadata.fps for i in range(args.chunk_length)]}
     dataset = LeRobotDataset(
         repo_id=args.demo_dataset_repo_id,
         root=args.demo_dataset_root,
@@ -349,7 +359,7 @@ def main() -> None:
 
         t_start = time.time()
         for split_name, eps in (("train", train_eps), ("val", val_eps)):
-            all_tx: list[dict[str, Tensor]] = []
+            all_tx: list[ChunkTransition] = []
             for k, ep_id in enumerate(eps):
                 ep_meta = dataset.meta.episodes
                 ep_from = int(ep_meta["dataset_from_index"][ep_id])

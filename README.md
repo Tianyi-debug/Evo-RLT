@@ -308,6 +308,7 @@ evo-rlt-build-transition-cache-v2 \
   --demo-dataset-repo-id <HF_ORG>/<DATASET> \
   --demo-dataset-root <LOCAL_DATASET_ROOT> \
   --rl-token-policy-path outputs/rl_token/checkpoints/last/pretrained_model \
+  --norm-stats-path <RL_TOKEN_NORM_STATS_PATH> \
   --vla-pretrained-path outputs/vla_ft/checkpoints/last/pretrained_model \
   --output-dir outputs/cache \
   --task-instruction "<TASK>" \
@@ -322,11 +323,11 @@ evo-rlt-build-transition-cache-v2 \
 
 The v2 cache stores the recorded dataset action as `exec_chunk`, the pi0.5
 proposal as `ref_chunk`, bootstraps from `x_{t+C}`, and reads per-episode
-`episode_success` metadata for the terminal reward. If an older successful-demo
-dataset has no labels, the default is `--missing-episode-success success`; use
-`--missing-episode-success error` when you want strict relabeling checks.
+`episode_success` metadata for the terminal reward. Missing labels are rejected
+by default. For a verified all-success legacy dataset, explicitly pass
+`--missing-episode-success success`.
 
-For SmolVLA, add `--vla-type smolvla`. Add `--tokenizer-path <LOCAL_TOKENIZER_OR_VLM_SNAPSHOT>` only when the saved VLA preprocessor cannot load its tokenizer offline.
+For SmolVLA, add `--vla-type smolvla`. Add `--tokenizer-path <LOCAL_TOKENIZER_OR_VLM_SNAPSHOT>` only when the saved VLA preprocessor cannot load its tokenizer offline. `--norm-stats-path` is only needed when the RL Token checkpoint's saved normalization-statistics path is no longer valid.
 
 <a id="train-chunk-actor-critic"></a>
 

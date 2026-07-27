@@ -309,7 +309,9 @@ def save_transition_cache(
         }
         for t in transitions
     ]
-    torch.save(data, path)
+    tmp = path.with_name(f".{path.name}.tmp")
+    torch.save(data, tmp)
+    tmp.replace(path)
     logger.info("Saved %d transitions to %s", len(data), path)
 
 
