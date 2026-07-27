@@ -157,6 +157,13 @@ class EpisodeResetPoseController:
         if self.pose_path.is_file() and not self.recapture:
             self.reset_pose = load_reset_pose(self.pose_path)
             print(f"Loaded episode reset pose: {self.pose_path}", flush=True)
+            logging.info("Moving arms to the loaded reset pose before the first episode.")
+            slow_reset_all_arms_to_pose(
+                robot=robot,
+                teleop=teleop,
+                target_pose=self.reset_pose,
+                duration_s=self.duration_s,
+            )
             return
 
         if not self.capture_if_missing:

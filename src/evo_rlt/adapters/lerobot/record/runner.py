@@ -1047,6 +1047,29 @@ def build_auto_reset_pose_argv(args: argparse.Namespace) -> list[str]:
     return argv
 
 
+def apply_manifest_reset_pose(args: argparse.Namespace, setup: dict[str, Any]) -> None:
+    reset_pose = setup.get("reset_pose")
+    if not isinstance(reset_pose, dict):
+        return
+
+    locked = bool(reset_pose.get("locked", False))
+    pose_path_raw = reset_pose.get("path")
+    if locked and not pose_path_raw:
+        raise ValueError("Locked manifest reset_pose requires a non-empty 'path'.")
+    if not pose_path_raw:
+        return
+
+    pose_path = Path(str(pose_path_raw)).expanduser()
+    if locked:
+        if not pose_path.is_file():
+            raise FileNotFoundError(f"Locked manifest reset pose does not exist: {pose_path}")
+        args.reset_pose_path = str(pose_path)
+        args.reset_pose_recapture = False
+        print(f"Locked episode reset pose: {pose_path}", flush=True)
+    elif args.reset_pose_path is None:
+        args.reset_pose_path = str(pose_path)
+
+
 def print_segment_summary(args: argparse.Namespace, paths) -> None:
     vla_horizon = args.vla_rtc_execution_horizon or args.rtc_execution_horizon
     print(f"\nDataset: {paths.dataset_name} -> {paths.dataset_root}")
@@ -1073,6 +1096,7 @@ def print_segment_summary(args: argparse.Namespace, paths) -> None:
 def run_full(args: argparse.Namespace) -> None:
     set_offline_env()
     setup = load_robot_setup(args.setup_json)
+    apply_manifest_reset_pose(args, setup.setup)
     dataset_prefix = _policy_dataset_prefix(f"{args.initial_source}_full", args.policy_path)
     paths = resolve_run_paths(setup.setup, args.dataset_tag, dataset_prefix)
     configure_logging(paths.log_file, args.log_level)

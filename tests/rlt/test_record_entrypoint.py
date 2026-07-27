@@ -588,7 +588,7 @@ def test_full_vla_pedal_outcome_parser():
     assert args.chunk_exec_steps == 25
     assert args.reset_time_s == 0
     assert args.auto_reset_pose is True
-    assert args.reset_pose_recapture is True
+    assert args.reset_pose_recapture is False
 
 
 def test_full_auto_reset_pose_argv_defaults_to_enabled():
@@ -596,13 +596,13 @@ def test_full_auto_reset_pose_argv_defaults_to_enabled():
         auto_reset_pose=True,
         reset_pose_duration_s=3.0,
         reset_pose_path=None,
-        reset_pose_recapture=True,
+        reset_pose_recapture=False,
     )
 
     assert build_auto_reset_pose_argv(args) == [
         "--auto_reset_pose=true",
         "--reset_pose_duration_s=3.0",
-        "--reset_pose_recapture=true",
+        "--reset_pose_recapture=false",
     ]
 
 
@@ -624,8 +624,19 @@ def test_full_vla_dry_run_accepts_headless_default_episode_success(tmp_path, cap
         (cal_dir / f"{serial}.json").write_text("{}")
 
     setup_json = tmp_path / "setup.json"
+    reset_pose_path = tmp_path / "expert_reset_pose.json"
+    reset_pose_path.write_text(json.dumps({
+        "joint_pos": {
+            "motor_1.pos": 1.0,
+            "motor_2.pos": -2.0,
+        }
+    }))
     setup_json.write_text(json.dumps({
         "datasets": {"root": str(tmp_path / "datasets")},
+        "reset_pose": {
+            "locked": True,
+            "path": str(reset_pose_path),
+        },
         "arms": [
             {
                 "alias": "left_follower",
@@ -657,6 +668,7 @@ def test_full_vla_dry_run_accepts_headless_default_episode_success(tmp_path, cap
         "--no-teleop",
         "--default-episode-success",
         "success",
+        "--reset-pose-recapture",
         "--dry-run",
     ])
 
@@ -665,7 +677,8 @@ def test_full_vla_dry_run_accepts_headless_default_episode_success(tmp_path, cap
     out = capsys.readouterr().out
     assert "--default_episode_success=success" in out
     assert "--auto_reset_pose=true" in out
-    assert "--reset_pose_recapture=true" in out
+    assert "--reset_pose_recapture=false" in out
+    assert f"--reset_pose_path={reset_pose_path}" in out
 
 
 def test_evo_rlt_recording_does_not_import_lerobot_fork_only_modules():

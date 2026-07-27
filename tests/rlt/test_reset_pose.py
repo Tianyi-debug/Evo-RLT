@@ -89,11 +89,24 @@ def test_controller_reuses_existing_pose(tmp_path, monkeypatch):
     controller = reset_pose.EpisodeResetPoseController(cfg=object(), pose_path=pose_path)
     calls = []
     monkeypatch.setattr("builtins.input", lambda _: calls.append("input"))
+    monkeypatch.setattr(
+        reset_pose,
+        "slow_reset_all_arms_to_pose",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    robot = FakeRobot()
 
-    controller.on_record_connected(robot=FakeRobot(), teleop=None)
+    controller.on_record_connected(robot=robot, teleop=None)
 
     assert controller.reset_pose == {"motor_1.pos": 3.0, "motor_2.pos": -4.0}
-    assert calls == []
+    assert calls == [
+        {
+            "robot": robot,
+            "teleop": None,
+            "target_pose": {"motor_1.pos": 3.0, "motor_2.pos": -4.0},
+            "duration_s": 3.0,
+        }
+    ]
 
 
 def test_controller_recaptures_existing_pose_with_teleop(tmp_path, monkeypatch):

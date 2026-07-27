@@ -1,0 +1,14 @@
+{
+  "aggregation": "per_joint_median_of_episode_first_frames",
+  "joint_pos": {
+    "elbow_flex.pos": 95.07691955566406,
+    "gripper.pos": 1.3812154531478882,
+    "shoulder_lift.pos": -100.61538696289062,
+    "shoulder_pan.pos": -2.2857143878936768,
+    "wrist_flex.pos": 74.46154022216797,
+    "wrist_roll.pos": -89.45054626464844
+  },
+  "num_episodes": 60,
+  "robot_type": "so_follower",
+  "source_dataset": "/home/zty/catkin_ws/src/Evo-RLT/data/0723_expert_task1_v0_merged"
+}
