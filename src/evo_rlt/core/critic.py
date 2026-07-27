@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-from evo_rlt.core.actor import ResidualMLP
+from evo_rlt.core.actor import ResidualMLP, normalize_state_vec
 from evo_rlt.core.utils import build_mlp
 
 
@@ -19,6 +19,8 @@ class ChunkCritic(nn.Module):
         activation: str = "relu",
         layer_norm: bool = False,
         residual: bool = False,
+        proprio_dim: int = 0,
+        state_normalization: str = "none",
     ):
         super().__init__()
         if residual:
@@ -31,9 +33,16 @@ class ChunkCritic(nn.Module):
                 state_dim + chunk_dim, hidden_dim, 1, num_layers,
                 activation=activation, layer_norm=layer_norm,
             )
+        self.proprio_dim = proprio_dim
+        self.state_normalization = state_normalization
 
     def forward(self, state_vec: torch.Tensor, action_flat: torch.Tensor) -> torch.Tensor:
         """Returns Q-value (B, 1)."""
+        state_vec = normalize_state_vec(
+            state_vec,
+            proprio_dim=self.proprio_dim,
+            mode=self.state_normalization,
+        )
         return self.net(torch.cat([state_vec, action_flat], dim=-1))
 
 
@@ -49,15 +58,19 @@ class TwinCritic(nn.Module):
         activation: str = "relu",
         layer_norm: bool = False,
         residual: bool = False,
+        proprio_dim: int = 0,
+        state_normalization: str = "none",
     ):
         super().__init__()
         self.q1 = ChunkCritic(
             state_dim, chunk_dim, hidden_dim, num_layers,
             activation=activation, layer_norm=layer_norm, residual=residual,
+            proprio_dim=proprio_dim, state_normalization=state_normalization,
         )
         self.q2 = ChunkCritic(
             state_dim, chunk_dim, hidden_dim, num_layers,
             activation=activation, layer_norm=layer_norm, residual=residual,
+            proprio_dim=proprio_dim, state_normalization=state_normalization,
         )
 
     def forward(

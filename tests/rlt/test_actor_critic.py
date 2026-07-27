@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 import pytest
 
-from evo_rlt.core.actor import ChunkActor
+from evo_rlt.core.actor import ChunkActor, normalize_state_vec
 from evo_rlt.core.critic import ChunkCritic, TwinCritic
 
 
@@ -64,6 +64,102 @@ class TestActor:
         for p in actor.parameters():
             assert p.grad is not None
 
+    def test_v2_starts_exactly_from_vla_reference(self):
+        actor = ChunkActor(
+            state_dim=14,
+            chunk_dim=12,
+            hidden_dim=32,
+            num_layers=2,
+            proprio_dim=6,
+            state_normalization="rl_token_layer_norm",
+            action_residual=True,
+            delta_scale=0.1,
+        )
+        state = torch.cat(
+            [torch.randn(8, 8) * 1500.0, torch.randn(8, 6)],
+            dim=-1,
+        )
+        ref = torch.empty(8, 12).uniform_(-1.2, 1.2)
+
+        mu, _ = actor(state, ref)
+
+        assert torch.equal(mu, ref.clamp(-1.0, 1.0))
+
+    def test_v2_delta_is_bounded_around_reference(self):
+        actor = ChunkActor(
+            state_dim=14,
+            chunk_dim=12,
+            hidden_dim=32,
+            num_layers=2,
+            proprio_dim=6,
+            state_normalization="rl_token_layer_norm",
+            action_residual=True,
+            delta_scale=0.1,
+        )
+        output_layer = actor.net[-1]
+        with torch.no_grad():
+            output_layer.bias.fill_(100.0)
+        state = torch.cat(
+            [torch.randn(8, 8) * 1500.0, torch.randn(8, 6)],
+            dim=-1,
+        )
+        ref = torch.zeros(8, 12)
+
+        mu, _ = actor(state, ref)
+
+        assert torch.all(mu <= 0.1)
+        assert torch.all(mu >= -0.1)
+        assert torch.allclose(mu, torch.full_like(mu, 0.1), atol=1e-6)
+
+    def test_rl_token_layer_norm_preserves_proprio_and_controls_scale(self):
+        z_rl = torch.randn(16, 2048) * 1300.0 + 100.0
+        proprio = torch.randn(16, 6)
+        state = torch.cat([z_rl, proprio], dim=-1)
+
+        normalized = normalize_state_vec(
+            state,
+            proprio_dim=6,
+            mode="rl_token_layer_norm",
+        )
+
+        normalized_z = normalized[:, :-6]
+        assert torch.allclose(normalized[:, -6:], proprio)
+        assert torch.allclose(
+            normalized_z.mean(dim=-1),
+            torch.zeros(16),
+            atol=1e-5,
+        )
+        assert torch.allclose(
+            normalized_z.std(dim=-1, unbiased=False),
+            torch.ones(16),
+            atol=1e-5,
+        )
+
+    def test_v2_large_rl_tokens_do_not_kill_first_relu(self):
+        actor = ChunkActor(
+            state_dim=2054,
+            chunk_dim=60,
+            hidden_dim=256,
+            num_layers=2,
+            proprio_dim=6,
+            state_normalization="rl_token_layer_norm",
+            action_residual=True,
+        )
+        state = torch.cat(
+            [torch.randn(64, 2048) * 1300.0, torch.randn(64, 6)],
+            dim=-1,
+        )
+        ref = torch.empty(64, 60).uniform_(-1.0, 1.0)
+        normalized = normalize_state_vec(
+            state,
+            proprio_dim=6,
+            mode="rl_token_layer_norm",
+        )
+        first_relu = torch.relu(actor.net[0](torch.cat([normalized, ref], dim=-1)))
+
+        assert (first_relu != 0).any()
+        assert first_relu.std(dim=0).mean() > 0
+
 
 class TestCritic:
     def test_chunk_critic_shape(self):
@@ -93,3 +189,21 @@ class TestCritic:
         q.sum().backward()
         for p in twin_critic.parameters():
             assert p.grad is not None
+
+    def test_v2_critic_is_conditioned_on_large_scale_states(self):
+        critic = ChunkCritic(
+            state_dim=2054,
+            chunk_dim=60,
+            hidden_dim=256,
+            proprio_dim=6,
+            state_normalization="rl_token_layer_norm",
+        )
+        state = torch.cat(
+            [torch.randn(64, 2048) * 1300.0, torch.randn(64, 6)],
+            dim=-1,
+        )
+        action = torch.empty(64, 60).uniform_(-1.0, 1.0)
+
+        q = critic(state, action)
+
+        assert q.std() > 0

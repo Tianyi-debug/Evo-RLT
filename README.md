@@ -347,6 +347,11 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --policy.vla_dtype=bfloat16 \
   --policy.rl_token_num_rl_tokens=1 \
   --policy.chunk_length=10 \
+  --policy.ac_semantics_version=2 \
+  --policy.state_normalization=rl_token_layer_norm \
+  --policy.actor_action_residual=true \
+  --policy.actor_delta_scale=0.1 \
+  --policy.actor_ref_dropout_p=0.0 \
   --policy.chunk_exec_steps=25 \
   --policy.phase_mode=always_rl \
   --policy.device=cuda \
@@ -359,6 +364,11 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
 ```
 
 For SmolVLA, set `--policy.vla_type=smolvla`. The actor-critic config reads the RL-token dimension from the saved `rlt_token` checkpoint, so you do not need to set `--policy.rl_token_dim`.
+
+AC semantics v2 normalizes the high-magnitude RL-token slice before the
+actor/critic MLPs and trains a zero-initialized, bounded action delta around the
+VLA reference. Unversioned local AC checkpoints keep the legacy absolute-action
+semantics when loaded; retrain them with v2 instead of resuming them.
 
 <a id="real-robot-recording-and-deployment"></a>
 

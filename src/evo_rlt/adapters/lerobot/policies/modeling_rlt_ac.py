@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import math
 import time
 from collections import deque
+from pathlib import Path
 from threading import Lock, Thread
 from typing import Any
 
@@ -54,6 +56,52 @@ class ChunkACPolicy(PreTrainedPolicy):
     config_class = ChunkACPolicyConfig
     name = "rlt_ac"
 
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_name_or_path: str | Path,
+        *,
+        config: ChunkACPolicyConfig | None = None,
+        force_download: bool = False,
+        resume_download: bool | None = None,
+        proxies: dict | None = None,
+        token: str | bool | None = None,
+        cache_dir: str | Path | None = None,
+        local_files_only: bool = False,
+        revision: str | None = None,
+        strict: bool = False,
+        **kwargs,
+    ) -> ChunkACPolicy:
+        # PreTrainedPolicy does not copy pretrained_name_or_path into the parsed
+        # config.  Preserve it here so __init__ can migrate unversioned local
+        # checkpoints to legacy v1 semantics before constructing the modules.
+        if config is None:
+            config = ChunkACPolicyConfig.from_pretrained(
+                pretrained_name_or_path,
+                force_download=force_download,
+                resume_download=resume_download,
+                proxies=proxies,
+                token=token,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                revision=revision,
+                **kwargs,
+            )
+        config.pretrained_path = str(pretrained_name_or_path)
+        return super().from_pretrained(
+            pretrained_name_or_path,
+            config=config,
+            force_download=force_download,
+            resume_download=resume_download,
+            proxies=proxies,
+            token=token,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            revision=revision,
+            strict=strict,
+            **kwargs,
+        )
+
     def __init__(
         self,
         config: ChunkACPolicyConfig,
@@ -63,6 +111,7 @@ class ChunkACPolicy(PreTrainedPolicy):
     ) -> None:
         super().__init__(config, *args, **kwargs)
         self.config: ChunkACPolicyConfig = config
+        self._apply_checkpoint_semantics_compat()
 
         rl_token_policy = self._load_rl_token_policy()
         object.__setattr__(self, "_rl_token_policy", rl_token_policy)
@@ -81,6 +130,10 @@ class ChunkACPolicy(PreTrainedPolicy):
             activation=config.actor_activation,
             layer_norm=config.actor_layer_norm,
             residual=config.actor_residual,
+            proprio_dim=config.proprio_dim,
+            state_normalization=config.state_normalization,
+            action_residual=config.actor_action_residual,
+            delta_scale=config.actor_delta_scale,
         )
         self.critic = TwinCritic(
             state_dim=state_dim,
@@ -90,6 +143,8 @@ class ChunkACPolicy(PreTrainedPolicy):
             activation=config.critic_activation,
             layer_norm=config.critic_layer_norm,
             residual=config.critic_residual,
+            proprio_dim=config.proprio_dim,
+            state_normalization=config.state_normalization,
         )
         self.target_critic = copy.deepcopy(self.critic)
         for p in self.target_critic.parameters():
@@ -122,6 +177,31 @@ class ChunkACPolicy(PreTrainedPolicy):
     # ------------------------------------------------------------------
     # Construction helpers
     # ------------------------------------------------------------------
+
+    def _apply_checkpoint_semantics_compat(self) -> None:
+        """Keep checkpoints created before AC v2 on their original semantics.
+
+        The v2 transformation is stateless and does not change tensor shapes,
+        which makes old weights technically loadable but would silently change
+        their behavior.  Local LeRobot deployment records ``pretrained_path``;
+        inspect its config and pin unversioned checkpoints to v1.
+        """
+        path_value = self.config.pretrained_path
+        if path_value:
+            config_path = Path(path_value).expanduser() / "config.json"
+            if config_path.is_file():
+                with config_path.open() as f:
+                    saved_config = json.load(f)
+                if "ac_semantics_version" not in saved_config:
+                    self.config.ac_semantics_version = 1
+
+        if self.config.ac_semantics_version == 1:
+            self.config.state_normalization = "none"
+            self.config.actor_action_residual = False
+            log.warning(
+                "Loading legacy AC v1 semantics: no RL-token state normalization "
+                "and absolute actor actions. Retrain with AC v2 before always_rl deployment."
+            )
 
     def _load_rl_token_policy(self) -> RLTokenPolicy:
         if not self.config.rl_token_pretrained_path:

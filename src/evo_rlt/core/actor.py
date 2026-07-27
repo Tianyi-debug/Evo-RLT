@@ -2,8 +2,45 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from evo_rlt.core.utils import build_mlp, _get_activation
+
+
+def normalize_state_vec(
+    state_vec: torch.Tensor,
+    *,
+    proprio_dim: int,
+    mode: str,
+) -> torch.Tensor:
+    """Normalize the high-magnitude RL-token portion of an AC state vector.
+
+    ``state_vec`` is ``[z_rl, proprio]``.  The RL token and proprioception have
+    very different semantics and scales, so only the RL-token slice is
+    normalized.  This is deliberately stateless: checkpoints do not need extra
+    affine parameters or running statistics, and training/deployment use the
+    exact same transformation.
+    """
+    if mode == "none":
+        return state_vec
+    if mode != "rl_token_layer_norm":
+        raise ValueError(
+            "state_normalization must be 'none' or 'rl_token_layer_norm', "
+            f"got {mode!r}"
+        )
+    if proprio_dim < 0 or proprio_dim >= state_vec.shape[-1]:
+        raise ValueError(
+            f"proprio_dim must be in [0, state_dim), got {proprio_dim} "
+            f"for state_dim={state_vec.shape[-1]}"
+        )
+
+    if proprio_dim == 0:
+        return F.layer_norm(state_vec, (state_vec.shape[-1],))
+
+    z_rl = state_vec[..., :-proprio_dim]
+    proprio = state_vec[..., -proprio_dim:]
+    z_rl = F.layer_norm(z_rl, (z_rl.shape[-1],))
+    return torch.cat([z_rl, proprio], dim=-1)
 
 
 class ResidualMLP(nn.Module):
@@ -55,8 +92,14 @@ class ChunkActor(nn.Module):
         activation: str = "relu",
         layer_norm: bool = False,
         residual: bool = False,
+        proprio_dim: int = 0,
+        state_normalization: str = "none",
+        action_residual: bool = False,
+        delta_scale: float = 0.1,
     ):
         super().__init__()
+        if delta_scale <= 0:
+            raise ValueError(f"delta_scale must be positive, got {delta_scale}")
         if residual:
             self.net = ResidualMLP(
                 state_dim + chunk_dim, hidden_dim, chunk_dim, num_layers,
@@ -67,8 +110,19 @@ class ChunkActor(nn.Module):
                 state_dim + chunk_dim, hidden_dim, chunk_dim, num_layers,
                 activation=activation, layer_norm=layer_norm,
             )
+        if action_residual:
+            # Start from the proven VLA policy exactly.  The first optimization
+            # step learns a bounded delta head instead of replacing the VLA
+            # chunk with a random absolute action.
+            output_layer = self.net.output_proj if residual else self.net[-1]
+            nn.init.zeros_(output_layer.weight)
+            nn.init.zeros_(output_layer.bias)
         self.fixed_std = fixed_std
         self.ref_dropout_p = ref_dropout_p
+        self.proprio_dim = proprio_dim
+        self.state_normalization = state_normalization
+        self.action_residual = action_residual
+        self.delta_scale = delta_scale
 
     def forward(
         self,
@@ -77,13 +131,32 @@ class ChunkActor(nn.Module):
         training: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass returning (mu, std)."""
+        # Match the action that the deployment path can actually execute.
+        # Clamping before adding the delta also lets the actor correct inward
+        # when a quantile-normalized VLA reference slightly exceeds [-1, 1].
+        base_ref = (
+            ref_chunk_flat.clamp(-1.0, 1.0)
+            if self.action_residual
+            else ref_chunk_flat
+        )
+        condition_ref = ref_chunk_flat
         if training:
             mask = (
                 torch.rand(state_vec.shape[0], 1, device=state_vec.device) > self.ref_dropout_p
             ).float()
-            ref_chunk_flat = ref_chunk_flat * mask
-        x = torch.cat([state_vec, ref_chunk_flat], dim=-1)
-        mu = self.net(x)
+            condition_ref = condition_ref * mask
+        state_vec = normalize_state_vec(
+            state_vec,
+            proprio_dim=self.proprio_dim,
+            mode=self.state_normalization,
+        )
+        x = torch.cat([state_vec, condition_ref], dim=-1)
+        network_out = self.net(x)
+        if self.action_residual:
+            delta = self.delta_scale * torch.tanh(network_out)
+            mu = (base_ref + delta).clamp(-1.0, 1.0)
+        else:
+            mu = network_out
         std = torch.full_like(mu, self.fixed_std)
         return mu, std
 

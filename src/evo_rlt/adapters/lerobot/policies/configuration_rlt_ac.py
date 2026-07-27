@@ -42,10 +42,15 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     actor_hidden_dim: int = 256
     actor_num_layers: int = 2
     actor_fixed_std: float = 0.05
-    actor_ref_dropout_p: float = 0.5
+    actor_ref_dropout_p: float = 0.0
     actor_activation: str = "relu"
     actor_layer_norm: bool = False
     actor_residual: bool = False
+    # AC v2: normalize only z_rl, then predict a bounded delta around VLA ref.
+    state_normalization: str = "rl_token_layer_norm"
+    actor_action_residual: bool = True
+    actor_delta_scale: float = 0.1
+    ac_semantics_version: int = 2
 
     # --- Critic + target ---
     critic_hidden_dim: int = 256
@@ -106,6 +111,19 @@ class ChunkACPolicyConfig(PreTrainedConfig):
         if self.phase_mode not in ("always_rl", "always_vla", "manual"):
             raise ValueError(
                 f"phase_mode must be 'always_rl', 'always_vla', or 'manual', got {self.phase_mode!r}"
+            )
+        if self.state_normalization not in ("none", "rl_token_layer_norm"):
+            raise ValueError(
+                "state_normalization must be 'none' or 'rl_token_layer_norm', "
+                f"got {self.state_normalization!r}"
+            )
+        if self.actor_delta_scale <= 0:
+            raise ValueError(
+                f"actor_delta_scale must be positive, got {self.actor_delta_scale}"
+            )
+        if self.ac_semantics_version not in (1, 2):
+            raise ValueError(
+                f"ac_semantics_version must be 1 or 2, got {self.ac_semantics_version}"
             )
 
     @property

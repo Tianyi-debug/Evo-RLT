@@ -86,5 +86,10 @@ def actor_loss(
     ref = batch["ref_chunk_flat"]
     mu, _ = actor.forward(x, ref, training=True)
     q = critic.min_q(x, mu)
-    bc_reg = ((mu - ref) ** 2).sum(dim=-1).mean()
+    bc_target = (
+        ref.clamp(-1.0, 1.0)
+        if getattr(actor, "action_residual", False)
+        else ref
+    )
+    bc_reg = ((mu - bc_target) ** 2).sum(dim=-1).mean()
     return -q.mean() + beta * bc_reg
