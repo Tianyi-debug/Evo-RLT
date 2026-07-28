@@ -14,6 +14,7 @@ from evo_rlt.adapters.lerobot.record.common import (
     stage_leader_calibrations,
 )
 from evo_rlt.adapters.lerobot.record import runner
+from evo_rlt.adapters.lerobot.record.backend import _build_collector_policy_id_codebook
 from evo_rlt.adapters.lerobot.record.runner import (
     _collect_external_episode_outcome_key,
     _patch_double_tap_episode_outcome_listener,
@@ -35,6 +36,21 @@ def test_initial_source_rejects_rlt():
             "--critical-source",
             "rlt",
         ])
+
+
+def test_rlt_ac_policy_path_uses_runtime_rlt_codebook():
+    cfg = SimpleNamespace(
+        rlt=SimpleNamespace(enable=False),
+        policy=SimpleNamespace(type="rlt_ac", pretrained_path="/tmp/ac/pretrained_model"),
+        collector_policy_id_human=0,
+        collector_policy_id_policy=1,
+    )
+
+    assert _build_collector_policy_id_codebook(cfg) == {
+        "0": "human",
+        "1": "pi0.5",
+        "2": "pi_rlt_actor",
+    }
 
 
 def test_segment_defaults_to_rtc_enabled():

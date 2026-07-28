@@ -327,6 +327,15 @@ proposal as `ref_chunk`, bootstraps from `x_{t+C}`, and reads per-episode
 by default. For a verified all-success legacy dataset, explicitly pass
 `--missing-episode-success success`.
 
+When the dataset contains the unified
+`complementary_info.is_intervention` and
+`complementary_info.collector_policy_id` columns, the default
+`--provenance-mode auto` preserves mixed expert/online semantics:
+human-dominant takeover chunks use the executed human action as `ref_chunk`,
+while autonomous VLA/RLT chunks keep the VLA proposal. Episode splitting is
+stratified by collector source, intervention, and success/failure by default.
+Use `--provenance-mode demo` only to force legacy all-demo behavior.
+
 For SmolVLA, add `--vla-type smolvla`. Add `--tokenizer-path <LOCAL_TOKENIZER_OR_VLM_SNAPSHOT>` only when the saved VLA preprocessor cannot load its tokenizer offline. `--norm-stats-path` is only needed when the RL Token checkpoint's saved normalization-statistics path is no longer valid.
 
 <a id="train-chunk-actor-critic"></a>
@@ -522,6 +531,11 @@ python -m evo_rlt.cli.aggregate_datasets \
   --source-root <SOURCE_DATASET_2> \
   --output-root <MERGED_DATASET>
 ```
+
+The wrapper also harmonizes collector-policy codebooks across teleop expert and
+policy-rollout datasets. Newly recorded datasets validate this codebook at
+finalization; rerunning `evo_rlt.cli.recompute_dataset_stats` repairs older
+datasets automatically.
 
 Running LeRobot's aggregation tool directly bypasses this wrapper; run
 `evo_rlt.cli.recompute_dataset_stats` on its output before quantile-normalized training.

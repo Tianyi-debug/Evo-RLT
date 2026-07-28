@@ -5,6 +5,7 @@ import logging
 
 import numpy as np
 
+from evo_rlt.adapters.lerobot.dataset_annotations import repair_collector_policy_id_codebook
 from evo_rlt.adapters.lerobot.dataset_stats import recompute_numeric_dataset_stats
 
 
@@ -38,6 +39,11 @@ def main() -> None:
         backup=args.backup,
         write=not args.check_only,
     )
+    codebook_result = repair_collector_policy_id_codebook(
+        args.dataset_root,
+        backup=args.backup,
+        write=not args.check_only,
+    )
     print(f"Dataset: {result.root}")
     print(f"Frames: {result.total_frames}")
     print(f"Recomputed numeric features: {', '.join(result.recomputed_features)}")
@@ -51,9 +57,19 @@ def main() -> None:
         )
     if result.backup_path is not None:
         print(f"Backup: {result.backup_path}")
+    if codebook_result is not None:
+        action = "would update" if args.check_only and codebook_result.changed else (
+            "updated" if codebook_result.changed else "valid"
+        )
+        print(
+            "Collector policy codebook: "
+            f"{action}; observed_ids={list(codebook_result.observed_ids)} "
+            f"codebook={codebook_result.after}"
+        )
+        if codebook_result.backup_path is not None:
+            print(f"Codebook backup: {codebook_result.backup_path}")
     print("Mode: check-only" if args.check_only else "Mode: stats.json updated")
 
 
 if __name__ == "__main__":
     main()
-

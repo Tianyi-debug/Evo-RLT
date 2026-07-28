@@ -196,6 +196,86 @@ def test_transition_cache_v2_semantic_builder_zero_reward_on_failure():
     assert all(t.reward_seq.sum().item() == pytest.approx(0.0) for t in transitions)
 
 
+def test_transition_cache_v2_mixed_provenance_repairs_human_reference():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    chunk_length = 2
+    frame_indices = [0, 1, 2, 3, 4]
+    ref_chunks = torch.arange(5 * 2 * 2, dtype=torch.float32).view(5, 2, 2)
+    exec_chunks = -ref_chunks - 1
+    provenance = module.FrameProvenance(
+        is_intervention=torch.tensor([0.0, 0.0, 1.0, 1.0, 1.0]),
+        collector_policy_id=torch.tensor([2, 2, 0, 0, 0]),
+    )
+
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.randn(5, 4),
+        ref_chunks=ref_chunks,
+        exec_chunks=exec_chunks,
+        frame_indices=frame_indices,
+        episode_last_frame=4,
+        chunk_length=chunk_length,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=60,
+        provenance=provenance,
+    )
+
+    assert len(transitions) == 3
+    assert transitions[0].source.item() == module.TRANSITION_SOURCE_RL_AUTONOMOUS
+    assert transitions[0].intervention.item() == 0.0
+    assert torch.equal(transitions[0].ref_chunk, ref_chunks[0])
+    assert transitions[1].source.item() == module.TRANSITION_SOURCE_HUMAN_OVERRIDE
+    assert transitions[1].intervention.item() == 1.0
+    assert torch.equal(transitions[1].ref_chunk, exec_chunks[1])
+    assert torch.equal(transitions[0].next_ref_chunk, exec_chunks[2])
+
+
+def test_transition_cache_v2_stratifies_source_and_outcome_groups():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    class Episodes:
+        def __getitem__(self, key):
+            values = {
+                "dataset_from_index": [0, 2, 4, 6, 8, 10],
+                "dataset_to_index": [2, 4, 6, 8, 10, 12],
+                "episode_success": [
+                    "success",
+                    "success",
+                    "success",
+                    "failure",
+                    "success",
+                    "failure",
+                ],
+            }
+            return values[key]
+
+    dataset = SimpleNamespace(meta=SimpleNamespace(episodes=Episodes()))
+    provenance = module.FrameProvenance(
+        is_intervention=torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0]),
+        collector_policy_id=torch.tensor([0, 0, 0, 0, 2, 2, 2, 2, 0, 0, 2, 2]),
+    )
+
+    train, val, summary = module._split_episode_indices(
+        dataset=dataset,
+        n_episodes=6,
+        train_ratio=0.5,
+        seed=42,
+        missing_episode_success="error",
+        provenance=provenance,
+        stratify_provenance=True,
+    )
+
+    assert sorted(train + val) == list(range(6))
+    assert set(train).isdisjoint(val)
+    assert summary == {
+        "demo/success": {"total": 2, "train": 1, "val": 1},
+        "online_rl_autonomous/failure": {"total": 2, "train": 1, "val": 1},
+        "online_rl_autonomous/success": {"total": 1, "train": 1, "val": 0},
+        "online_rl_intervention/success": {"total": 1, "train": 1, "val": 0},
+    }
+
+
 def test_transition_cache_v2_extracts_preprocessed_exec_action():
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 

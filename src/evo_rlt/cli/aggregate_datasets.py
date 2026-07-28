@@ -4,6 +4,10 @@ import argparse
 import logging
 from pathlib import Path
 
+from evo_rlt.adapters.lerobot.dataset_annotations import (
+    harmonize_collector_policy_id_codebooks,
+    repair_collector_policy_id_codebook,
+)
 from evo_rlt.adapters.lerobot.dataset_stats import recompute_numeric_dataset_stats
 
 
@@ -39,11 +43,20 @@ def main() -> None:
 
     from lerobot.datasets.aggregate import aggregate_datasets
 
+    codebook = harmonize_collector_policy_id_codebooks(source_roots, backup=True)
+    if codebook is not None:
+        logging.info("Harmonized collector policy codebook across sources: %s", codebook)
     aggregate_datasets(
         repo_ids=[f"local/{root.name}" for root in source_roots],
         aggr_repo_id=output_repo_id,
         roots=source_roots,
         aggr_root=output_root,
+    )
+    repair_collector_policy_id_codebook(
+        output_root,
+        backup=False,
+        write=True,
+        codebook=codebook,
     )
     result = recompute_numeric_dataset_stats(output_root, backup=False, write=True)
     print(
@@ -55,4 +68,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

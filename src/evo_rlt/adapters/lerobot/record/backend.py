@@ -480,7 +480,8 @@ def _add_collector_policy_id_feature(dataset_features: dict[str, dict]) -> None:
 
 
 def _build_collector_policy_id_codebook(cfg: RecordConfig) -> dict[str, str]:
-    if cfg.rlt.enable:
+    policy_type = getattr(cfg.policy, "type", None) if cfg.policy is not None else None
+    if cfg.rlt.enable or policy_type == "rlt_ac":
         return {str(code): name for code, name in RLT_COLLECTOR_POLICY_ID_TO_NAME.items()}
     if cfg.policy is None:
         return {str(cfg.collector_policy_id_human): "human"}
@@ -979,8 +980,22 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 return
             dataset.finalize()
             try:
+                from evo_rlt.adapters.lerobot.dataset_annotations import (
+                    repair_collector_policy_id_codebook,
+                )
                 from evo_rlt.adapters.lerobot.dataset_stats import recompute_numeric_dataset_stats
 
+                codebook_result = repair_collector_policy_id_codebook(
+                    dataset.root,
+                    backup=False,
+                    write=True,
+                )
+                if codebook_result is not None and codebook_result.changed:
+                    logging.info(
+                        "Repaired collector policy id codebook from observed ids %s: %s",
+                        codebook_result.observed_ids,
+                        codebook_result.after,
+                    )
                 result = recompute_numeric_dataset_stats(dataset.root, backup=False, write=True)
                 dataset.meta.stats = result.stats
                 for key, validation in result.validation.items():
