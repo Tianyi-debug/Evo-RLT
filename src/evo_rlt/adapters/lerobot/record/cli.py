@@ -136,6 +136,12 @@ def build_parser() -> argparse.ArgumentParser:
     full.add_argument("--reset-pose-path", default=None)
     full.add_argument("--reset-pose-duration-s", type=float, default=3.0)
     full.add_argument("--reset-pose-recapture", action=argparse.BooleanOptionalAction, default=False)
+    full.add_argument(
+        "--display-data",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Display live camera and control data in a local Rerun viewer.",
+    )
     full.set_defaults(func=run_full)
 
     live = subparsers.add_parser("live", help="Run policy live on the robot without saving a dataset.")

@@ -22,6 +22,7 @@ from evo_rlt.adapters.lerobot.record.runner import (
     _patch_skip_policyless_reset_loop,
     build_auto_reset_pose_argv,
     build_default_collect_record_argv,
+    build_display_data_argv,
     build_segment_record_argv,
 )
 
@@ -70,6 +71,26 @@ def test_segment_defaults_to_rtc_enabled():
 def test_full_teleop_without_policy_does_not_use_eval_dataset_prefix():
     assert _policy_dataset_prefix("teleop_full", None) == "teleop_full"
     assert _policy_dataset_prefix("vla_full", "/tmp/policy") == "eval_vla_full"
+
+
+def test_full_local_display_forwards_to_record_backend():
+    parser = build_parser()
+    args = parser.parse_args([
+        "full",
+        "--initial-source",
+        "teleop",
+        "--display-data",
+    ])
+    default_args = parser.parse_args([
+        "full",
+        "--initial-source",
+        "teleop",
+    ])
+
+    assert args.display_data is True
+    assert build_display_data_argv(args.display_data) == ["--display_data=true"]
+    assert default_args.display_data is False
+    assert build_display_data_argv(default_args.display_data) == []
 
 
 def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():

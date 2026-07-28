@@ -1034,6 +1034,12 @@ def build_reset_time_argv(args: argparse.Namespace) -> list[str]:
     return [f"--dataset.reset_time_s={args.reset_time_s}"]
 
 
+def build_display_data_argv(display_data: bool) -> list[str]:
+    if not display_data:
+        return []
+    return ["--display_data=true"]
+
+
 def build_auto_reset_pose_argv(args: argparse.Namespace) -> list[str]:
     if not getattr(args, "auto_reset_pose", False):
         return ["--auto_reset_pose=false"]
@@ -1134,6 +1140,7 @@ def run_full(args: argparse.Namespace) -> None:
             ),
             *build_reset_time_argv(args),
             *build_auto_reset_pose_argv(args),
+            *build_display_data_argv(args.display_data),
             *build_rtc_argv(
                 enabled=args.rtc,
                 execution_horizon=args.rtc_execution_horizon,
