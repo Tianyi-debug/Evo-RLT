@@ -108,6 +108,7 @@ def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
         vcodec="h264",
         double_tap_window_s=0.6,
         intervention_action_blend_time_s=0.4,
+        two_stage_intervention=True,
         rtc=True,
         rtc_execution_horizon=10,
         rtc_max_guidance_weight=10.0,
@@ -139,6 +140,7 @@ def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
     assert "--rlt.rtc_enabled=true" in argv
     assert "--enable_episode_outcome_labeling=true" in argv
     assert "--policy_sync_to_teleop=true" in argv
+    assert "--rlt.two_stage_intervention=true" in argv
     assert "--policy.path=/tmp/ac" in argv
 
 
@@ -626,6 +628,8 @@ def test_full_vla_pedal_outcome_parser():
     assert args.reset_time_s == 0
     assert args.auto_reset_pose is True
     assert args.reset_pose_recapture is False
+    assert args.two_stage_intervention is True
+    assert args.intervention_action_blend_time_s == pytest.approx(0.4)
 
 
 def test_full_auto_reset_pose_argv_defaults_to_enabled():
@@ -716,6 +720,8 @@ def test_full_vla_dry_run_accepts_headless_default_episode_success(tmp_path, cap
     assert "--auto_reset_pose=true" in out
     assert "--reset_pose_recapture=false" in out
     assert f"--reset_pose_path={reset_pose_path}" in out
+    assert "--rlt.two_stage_intervention=true" in out
+    assert "--rlt.intervention_action_blend_time_s=0.4" in out
 
 
 def test_evo_rlt_recording_does_not_import_lerobot_fork_only_modules():

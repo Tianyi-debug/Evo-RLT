@@ -231,6 +231,45 @@ def test_transition_cache_v2_mixed_provenance_repairs_human_reference():
     assert torch.equal(transitions[0].next_ref_chunk, exec_chunks[2])
 
 
+def test_transition_cache_v2_excludes_two_stage_hold_and_handoff_chunks():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    chunk_length = 2
+    frame_indices = list(range(9))
+    ref_chunks = torch.arange(9 * 2 * 2, dtype=torch.float32).view(9, 2, 2)
+    exec_chunks = -ref_chunks - 1
+    provenance = module.FrameProvenance(
+        is_intervention=torch.tensor([0, 0, 1, 1, 1, 1, 1, 1, 0], dtype=torch.float32),
+        collector_policy_id=torch.tensor([2, 2, 0, 0, 0, 0, 0, 0, 2]),
+        intervention_stage=torch.tensor([0, 0, 1, 1, 2, 2, 2, 2, 3], dtype=torch.float32),
+    )
+
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.arange(9 * 4, dtype=torch.float32).view(9, 4),
+        ref_chunks=ref_chunks,
+        exec_chunks=exec_chunks,
+        frame_indices=frame_indices,
+        episode_last_frame=8,
+        chunk_length=chunk_length,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=61,
+        provenance=provenance,
+    )
+
+    assert len(transitions) == 3
+    assert [int(transition.state_vec[0].item() // 4) for transition in transitions] == [4, 5, 6]
+    assert all(
+        transition.source.item() == module.TRANSITION_SOURCE_HUMAN_OVERRIDE
+        for transition in transitions
+    )
+    assert all(transition.intervention.item() == 1.0 for transition in transitions)
+    assert all(
+        torch.equal(transition.ref_chunk, transition.exec_chunk)
+        for transition in transitions
+    )
+
+
 def test_transition_cache_v2_stratifies_source_and_outcome_groups():
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 

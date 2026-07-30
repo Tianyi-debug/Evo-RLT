@@ -34,6 +34,14 @@ SOURCE_VLA = 0.0
 SOURCE_RL = 1.0
 SOURCE_HUMAN = 2.0
 
+# Fine-grained intervention stages.  `is_intervention` remains the coarse
+# execution flag, while this field separates the safety handoff from actual
+# human corrective actions.
+INTERVENTION_STAGE_POLICY = 0.0
+INTERVENTION_STAGE_HOLD = 1.0
+INTERVENTION_STAGE_TELEOP = 2.0
+INTERVENTION_STAGE_RELEASE = 3.0
+
 # Unified collector policy codes stored in `complementary_info.collector_policy_id`.
 COLLECTOR_HUMAN = 0
 COLLECTOR_POLICY = 1

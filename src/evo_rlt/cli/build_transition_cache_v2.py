@@ -32,6 +32,10 @@ from evo_rlt.adapters.lerobot.offline_dataset import (
     build_overlap_frame_indices,
     save_transition_cache,
 )
+from evo_rlt.adapters.lerobot.record.annotations import (
+    INTERVENTION_STAGE_POLICY,
+    INTERVENTION_STAGE_TELEOP,
+)
 from evo_rlt.adapters.lerobot.policies.action_modifier import PrefixOutputCapture
 from evo_rlt.adapters.lerobot.policies.configuration_rlt_token import RLTokenPolicyConfig
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_token import RLTokenPolicy
@@ -113,6 +117,7 @@ def parse_args() -> argparse.Namespace:
 class FrameProvenance:
     is_intervention: Tensor
     collector_policy_id: Tensor
+    intervention_stage: Tensor | None = None
 
 
 def _log(msg: str) -> None:
@@ -149,6 +154,10 @@ def _load_frame_provenance(
         return None
     intervention = _dataset_scalar_column(dataset, "complementary_info.is_intervention")
     collector = _dataset_scalar_column(dataset, "complementary_info.collector_policy_id")
+    intervention_stage = _dataset_scalar_column(
+        dataset,
+        "complementary_info.intervention_stage",
+    )
     if intervention is None or collector is None:
         if mode == "mixed":
             raise KeyError(
@@ -168,14 +177,27 @@ def _load_frame_provenance(
     collector_t = collector_float.round().to(torch.long)
     if not torch.allclose(collector_float, collector_t.to(torch.float32)):
         raise ValueError("complementary_info.collector_policy_id contains non-integer values")
+    intervention_stage_t = None
+    if intervention_stage is not None:
+        if len(intervention_stage) != len(dataset):
+            raise ValueError(
+                "Intervention-stage column must align with dataset frames: "
+                f"stage={len(intervention_stage)} dataset={len(dataset)}"
+            )
+        intervention_stage_t = torch.as_tensor(
+            intervention_stage,
+            dtype=torch.float32,
+        ).reshape(-1)
     _log(
         "collector provenance: "
         f"frames={len(dataset)} intervention_frac={float((intervention_t > 0.5).float().mean()):.3f} "
-        f"collector_ids={sorted(int(value) for value in collector_t.unique().tolist())}"
+        f"collector_ids={sorted(int(value) for value in collector_t.unique().tolist())} "
+        f"intervention_stage={'present' if intervention_stage_t is not None else 'legacy-absent'}"
     )
     return FrameProvenance(
         is_intervention=intervention_t,
         collector_policy_id=collector_t,
+        intervention_stage=intervention_stage_t,
     )
 
 
@@ -191,17 +213,37 @@ def _chunk_provenance(
     provenance: FrameProvenance,
     start_frame: int,
     chunk_length: int,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, bool]:
     intervention = provenance.is_intervention[start_frame : start_frame + chunk_length]
     if intervention.numel() != chunk_length:
         raise ValueError(
             f"Provenance window at frame {start_frame} has {intervention.numel()} "
             f"values, expected {chunk_length}"
         )
-    human_frames = int((intervention > 0.5).sum().item())
-    human_override = human_frames >= chunk_length - human_frames
-    if human_override:
-        return TRANSITION_SOURCE_HUMAN_OVERRIDE, True
+    if provenance.intervention_stage is not None:
+        stage = provenance.intervention_stage[start_frame : start_frame + chunk_length]
+        if stage.numel() != chunk_length:
+            raise ValueError(
+                f"Intervention-stage window at frame {start_frame} has {stage.numel()} "
+                f"values, expected {chunk_length}"
+            )
+        is_policy_chunk = bool(torch.all(stage == INTERVENTION_STAGE_POLICY))
+        is_teleop_chunk = bool(torch.all(stage == INTERVENTION_STAGE_TELEOP))
+        if is_teleop_chunk:
+            if not bool(torch.all(intervention > 0.5)):
+                raise ValueError(
+                    f"Teleop stage at frame {start_frame} is inconsistent with is_intervention"
+                )
+            return TRANSITION_SOURCE_HUMAN_OVERRIDE, True, True
+        if not is_policy_chunk:
+            # Any hold/release frame, or a chunk crossing a handoff boundary,
+            # is a safety transition rather than policy or human supervision.
+            return TRANSITION_SOURCE_DEMO, False, False
+    else:
+        human_frames = int((intervention > 0.5).sum().item())
+        human_override = human_frames >= chunk_length - human_frames
+        if human_override:
+            return TRANSITION_SOURCE_HUMAN_OVERRIDE, True, True
 
     collector = provenance.collector_policy_id[start_frame : start_frame + chunk_length]
     collector_id = _dominant_collector_id(collector)
@@ -210,7 +252,7 @@ def _chunk_provenance(
         1: TRANSITION_SOURCE_WARMUP_VLA,
         2: TRANSITION_SOURCE_RL_AUTONOMOUS,
     }.get(collector_id, TRANSITION_SOURCE_RL_AUTONOMOUS)
-    return source, False
+    return source, False, True
 
 
 def _episode_provenance_group(
@@ -392,12 +434,14 @@ def _encoded_episode_to_transitions(
             f"vs transitions={len(transitions)}"
         )
 
+    usable_by_anchor: dict[int, bool] = {}
     for transition, start_frame in zip(transitions, start_anchors, strict=True):
-        source, human_override = _chunk_provenance(
+        source, human_override, usable = _chunk_provenance(
             provenance,
             start_frame,
             chunk_length,
         )
+        usable_by_anchor[start_frame] = usable
         transition.source = torch.tensor(source)
         transition.intervention = torch.tensor(float(human_override))
         if human_override:
@@ -409,9 +453,27 @@ def _encoded_episode_to_transitions(
     anchor_to_index = {anchor: index for index, anchor in enumerate(start_anchors)}
     for transition, start_frame in zip(transitions, start_anchors, strict=True):
         next_index = anchor_to_index.get(start_frame + chunk_length)
-        if next_index is not None:
+        if next_index is not None and usable_by_anchor[start_anchors[next_index]]:
             transition.next_ref_chunk = transitions[next_index].ref_chunk.clone()
-    return transitions
+
+    if provenance.intervention_stage is None:
+        return transitions
+
+    filtered: list[ChunkTransition] = []
+    for transition, start_frame in zip(transitions, start_anchors, strict=True):
+        if not usable_by_anchor[start_frame]:
+            continue
+        next_index = anchor_to_index.get(start_frame + chunk_length)
+        if (
+            not bool(transition.done.item())
+            and next_index is not None
+            and not usable_by_anchor[start_anchors[next_index]]
+        ):
+            # Avoid bootstrapping an otherwise valid chunk into a hold/release
+            # handoff state.
+            continue
+        filtered.append(transition)
+    return filtered
 
 
 def _encode_episode(

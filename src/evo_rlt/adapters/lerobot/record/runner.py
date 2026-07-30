@@ -992,6 +992,7 @@ def build_segment_record_argv(args, setup, paths, cal_dir: str, teleop_argv: lis
         f"--rlt.start_in_teleop={'true' if args.initial_source == 'teleop' else 'false'}",
         f"--rlt.rl_phase_double_tap_window_s={args.double_tap_window_s}",
         f"--rlt.intervention_action_blend_time_s={args.intervention_action_blend_time_s}",
+        f"--rlt.two_stage_intervention={'true' if args.two_stage_intervention else 'false'}",
         *build_rtc_argv(
             enabled=args.rtc,
             execution_horizon=args.rtc_execution_horizon,
@@ -1141,6 +1142,8 @@ def run_full(args: argparse.Namespace) -> None:
             *build_reset_time_argv(args),
             *build_auto_reset_pose_argv(args),
             *build_display_data_argv(args.display_data),
+            f"--rlt.intervention_action_blend_time_s={args.intervention_action_blend_time_s}",
+            f"--rlt.two_stage_intervention={'true' if args.two_stage_intervention else 'false'}",
             *build_rtc_argv(
                 enabled=args.rtc,
                 execution_horizon=args.rtc_execution_horizon,

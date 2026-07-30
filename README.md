@@ -455,7 +455,7 @@ Default collection controls:
 Full-trajectory mode:
 r              save the full episode as success after the double-tap window
 r+r            save the full episode as failure
-space          toggle teleop intervention; pressing again exits teleop
+space          first press holds both arms; second enters teleop; third returns to policy
 left arrow     return to reset pose and rerecord the current episode
 Esc            stop data collection
 
@@ -463,7 +463,7 @@ Critical-segment mode (`--only-critical`):
 r              enter RLT mode and start recording the critical segment
 r              save the segment as success, exit RLT mode, then end the episode
 r+r            save the segment as failure, exit RLT mode, then end the episode
-space          toggle teleop intervention; pressing again exits teleop
+space          first press holds both arms; second enters teleop; third returns to policy
 left arrow     rerecord the current episode
 Esc            stop data collection
 ```
@@ -500,6 +500,20 @@ evo-rlt-record full \
 
 For headless SSH runs where no keyboard or pedal outcome will be provided, add
 `--default-episode-success success` or `--default-episode-success failure`.
+
+Policy-plus-teleop `full` recording uses two-stage intervention by default:
+
+```text
+first i press    hold the follower at its current pose and synchronize the leader
+second i press   release the leader and begin human teleoperation
+third i press    return control to the policy and recompute its next action
+```
+
+The hold, teleop, and release frames are recorded separately in
+`complementary_info.intervention_stage`. Transition-cache v2 excludes hold/release and
+handoff-boundary chunks from policy or human supervision. Use `--no-two-stage-intervention` only
+to restore the legacy immediate handoff, and adjust the default 0.4-second hold-to-teleop blend with
+`--intervention-action-blend-time-s`.
 
 Pedal semantics in this mode:
 

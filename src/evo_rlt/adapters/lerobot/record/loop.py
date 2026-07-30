@@ -54,6 +54,10 @@ from evo_rlt.adapters.lerobot.record.annotations import (
     COLLECTOR_POLICY,
     EPISODE_FAILURE,
     EPISODE_SUCCESS,
+    INTERVENTION_STAGE_HOLD,
+    INTERVENTION_STAGE_POLICY,
+    INTERVENTION_STAGE_RELEASE,
+    INTERVENTION_STAGE_TELEOP,
     PHASE_CRITICAL,
     PHASE_PREFIX,
     SOURCE_HUMAN,
@@ -77,6 +81,23 @@ def _clone_robot_action(action: RobotAction) -> RobotAction:
         else:
             cloned[key] = value
     return cloned
+
+
+def _extract_hold_action(
+    observation: RobotObservation,
+    action_feature_names: list[str],
+    fallback_action: RobotAction | None = None,
+) -> RobotAction:
+    """Build a complete position-hold command from the current observation."""
+    hold_action: RobotAction = {}
+    for name in action_feature_names:
+        if name in observation:
+            hold_action[name] = float(np.asarray(observation[name]).reshape(-1)[0])
+        elif fallback_action is not None and name in fallback_action:
+            hold_action[name] = _clone_robot_action({name: fallback_action[name]})[name]
+        else:
+            hold_action[name] = 0.0
+    return hold_action
 
 
 def _blend_robot_actions(
@@ -219,6 +240,7 @@ def record_loop(
     rl_phase_double_tap_window_s: float = 1.0,
     start_in_teleop: bool = False,
     intervention_action_blend_time_s: float = 0.0,
+    two_stage_intervention: bool = True,
 ):
     if intervention_action_blend_time_s < 0:
         raise ValueError("intervention_action_blend_time_s must be >= 0")
@@ -283,6 +305,8 @@ def record_loop(
     last_policy_action_for_blend: RobotAction | None = None
     intervention_blend_start_t: float | None = None
     intervention_blend_start_action: RobotAction | None = None
+    intervention_hold_armed = False
+    intervention_hold_action: RobotAction | None = None
     teleop_fallback_warned = False
 
     teleop_arm_for_mode_switch: Any | None = None
@@ -390,16 +414,39 @@ def record_loop(
             return 0
         return dataset.episode_buffer["size"]
 
-    def _start_intervention() -> None:
+    def _arm_intervention_hold() -> None:
         nonlocal intervention_state, intervention_blend_start_t, intervention_blend_start_action
-        nonlocal pending_end_press_time
+        nonlocal intervention_hold_armed, intervention_hold_action, pending_end_press_time
         intervention_state = INTERVENTION_STATE_ACTIVE
+        intervention_hold_armed = True
+        intervention_hold_action = None
+        intervention_blend_start_t = None
+        intervention_blend_start_action = None
+        set_teleop_manual_control(False)
+        if rlt is not None:
+            rlt.interrupt_chunk()
+            log_say("hold", play_sounds=True)
+        pending_end_press_time = None
+        logging.info(
+            "Intervention armed (S1 hold): follower pose is held and mirrored to the leader. "
+            "Press the intervention toggle again to enter manual teleoperation."
+        )
+
+    def _activate_human_intervention() -> None:
+        nonlocal intervention_state, intervention_blend_start_t, intervention_blend_start_action
+        nonlocal intervention_hold_armed, intervention_hold_action, pending_end_press_time
+        nonlocal teleop_fallback_warned
+        blend_start_action = intervention_hold_action or last_policy_action_for_blend
+        intervention_state = INTERVENTION_STATE_ACTIVE
+        intervention_hold_armed = False
+        intervention_hold_action = None
+        teleop_fallback_warned = False
         set_teleop_manual_control(True)
         if rlt_intervention_tracker is not None:
             rlt_intervention_tracker.start(get_episode_frame_index())
-        if intervention_action_blend_time_s > 0 and last_policy_action_for_blend is not None:
+        if intervention_action_blend_time_s > 0 and blend_start_action is not None:
             intervention_blend_start_t = time.perf_counter()
-            intervention_blend_start_action = _clone_robot_action(last_policy_action_for_blend)
+            intervention_blend_start_action = _clone_robot_action(blend_start_action)
             logging.info("Intervention action blend started for %.2fs.", intervention_action_blend_time_s)
         else:
             intervention_blend_start_t = None
@@ -424,9 +471,12 @@ def record_loop(
 
     def _release_intervention() -> None:
         nonlocal intervention_state, intervention_blend_start_t, intervention_blend_start_action
-        if rlt_intervention_tracker is not None:
+        nonlocal intervention_hold_armed, intervention_hold_action
+        if rlt_intervention_tracker is not None and not intervention_hold_armed:
             rlt_intervention_tracker.stop(get_episode_frame_index())
         intervention_state = INTERVENTION_STATE_RELEASE
+        intervention_hold_armed = False
+        intervention_hold_action = None
         intervention_blend_start_t = None
         intervention_blend_start_action = None
         set_teleop_manual_control(False)
@@ -448,7 +498,13 @@ def record_loop(
             logging.info("Intervention toggle ignored because policy+teleop are not both active.")
             return
         if intervention_state == INTERVENTION_STATE_POLICY:
-            _start_intervention()
+            if two_stage_intervention:
+                _arm_intervention_hold()
+            else:
+                _activate_human_intervention()
+            return
+        if intervention_hold_armed:
+            _activate_human_intervention()
             return
         _release_intervention()
 
@@ -497,9 +553,14 @@ def record_loop(
 
     def _start_rl_phase_from_key() -> None:
         nonlocal intervention_state, intervention_blend_start_t, intervention_blend_start_action
+        nonlocal intervention_hold_armed, intervention_hold_action
         nonlocal rl_phase_started, pending_end_press_time
         if intervention_enabled and intervention_state == INTERVENTION_STATE_ACTIVE:
+            if rlt_intervention_tracker is not None and not intervention_hold_armed:
+                rlt_intervention_tracker.stop(get_episode_frame_index())
             intervention_state = INTERVENTION_STATE_RELEASE
+            intervention_hold_armed = False
+            intervention_hold_action = None
             intervention_blend_start_t = None
             intervention_blend_start_action = None
             set_teleop_manual_control(False)
@@ -552,11 +613,14 @@ def record_loop(
 
     def _release_active_intervention_after_phase_end() -> None:
         nonlocal intervention_state, intervention_blend_start_t, intervention_blend_start_action
+        nonlocal intervention_hold_armed, intervention_hold_action
         if not (intervention_enabled and intervention_state == INTERVENTION_STATE_ACTIVE):
             return
-        if rlt_intervention_tracker is not None:
+        if rlt_intervention_tracker is not None and not intervention_hold_armed:
             rlt_intervention_tracker.stop(get_episode_frame_index())
         intervention_state = INTERVENTION_STATE_RELEASE
+        intervention_hold_armed = False
+        intervention_hold_action = None
         intervention_blend_start_t = None
         intervention_blend_start_action = None
         set_teleop_manual_control(False)
@@ -583,6 +647,8 @@ def record_loop(
         if not (intervention_enabled and intervention_state == INTERVENTION_STATE_ACTIVE):
             action = act_processed_policy if act_processed_policy is not None else act_processed_teleop
             return 0.0, action
+        if intervention_hold_armed and intervention_hold_action is not None:
+            return 1.0, intervention_hold_action
         if act_processed_teleop is not None:
             return 1.0, act_processed_teleop
         if last_teleop_action is not None:
@@ -674,6 +740,13 @@ def record_loop(
 
         # Applies a pipeline to the raw robot observation, default is IdentityProcessor
         obs_processed = robot_observation_processor(obs)
+        if intervention_hold_armed and intervention_hold_action is None:
+            intervention_hold_action = _extract_hold_action(
+                obs_processed,
+                action_feature_names,
+                fallback_action=last_policy_action_for_blend,
+            )
+            logging.info("Captured intervention hold pose from current robot observation.")
 
         if dataset is not None:
             observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
@@ -735,6 +808,11 @@ def record_loop(
         )
 
         is_intervention, action_values = _select_action_values(act_processed_policy, act_processed_teleop)
+        selected_from_intervention_hold = (
+            intervention_hold_armed
+            and intervention_hold_action is not None
+            and action_values is intervention_hold_action
+        )
         action_values = _apply_intervention_blend(is_intervention, action_values)
 
         # Applies a pipeline to the action, default is IdentityProcessor
@@ -748,7 +826,7 @@ def record_loop(
         if selected_from_policy:
             last_policy_action_for_blend = _clone_robot_action(action_values)
         _t0 = time.perf_counter()
-        if policy_sync_executor is not None and selected_from_policy:
+        if policy_sync_executor is not None and (selected_from_policy or selected_from_intervention_hold):
             _sent_action = run_with_connection_retry(
                 "policy_sync_executor.send_action",
                 lambda robot_action_to_send=robot_action_to_send: policy_sync_executor.send_action(
@@ -792,6 +870,19 @@ def record_loop(
                 frame["complementary_info.is_intervention"] = np.array([is_intervention], dtype=np.float32)
             if "complementary_info.state" in dataset.features:
                 frame["complementary_info.state"] = np.array([intervention_state], dtype=np.float32)
+            if "complementary_info.intervention_stage" in dataset.features:
+                if intervention_state == INTERVENTION_STATE_RELEASE:
+                    intervention_stage = INTERVENTION_STAGE_RELEASE
+                elif intervention_hold_armed:
+                    intervention_stage = INTERVENTION_STAGE_HOLD
+                elif intervention_state == INTERVENTION_STATE_ACTIVE:
+                    intervention_stage = INTERVENTION_STAGE_TELEOP
+                else:
+                    intervention_stage = INTERVENTION_STAGE_POLICY
+                frame["complementary_info.intervention_stage"] = np.array(
+                    [intervention_stage],
+                    dtype=np.float32,
+                )
             if "complementary_info.collector_policy_id" in dataset.features:
                 collector_code = _collector_policy_code(is_intervention, selected_from_policy, rlt_source)
                 frame["complementary_info.collector_policy_id"] = np.array([collector_code], dtype=np.int64)
@@ -850,9 +941,11 @@ def record_loop(
     # the resolved success/failure outcome.
     if final_outcome is not None:
         if intervention_enabled and intervention_state == INTERVENTION_STATE_ACTIVE:
-            if rlt_intervention_tracker is not None:
+            if rlt_intervention_tracker is not None and not intervention_hold_armed:
                 rlt_intervention_tracker.stop(get_episode_frame_index())
             intervention_state = INTERVENTION_STATE_RELEASE
+            intervention_hold_armed = False
+            intervention_hold_action = None
             set_teleop_manual_control(False)
         if rlt is not None:
             rlt.set_vla_mode()

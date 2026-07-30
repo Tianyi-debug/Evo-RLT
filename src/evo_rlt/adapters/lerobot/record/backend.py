@@ -246,6 +246,9 @@ class RLTRecordConfig:
     # Blend follower commands from the last policy action to teleop during
     # SPACE handoff, reducing one-frame jumps when the leader is released.
     intervention_action_blend_time_s: float = 0.0
+    # Two-stage intervention: the first toggle holds the follower pose and
+    # synchronizes the leader; the second enables manual teleoperation.
+    two_stage_intervention: bool = True
     # RTC deploy settings for rlt_ac. Disabled by default so existing record
     # scripts keep the synchronous chunk queue.
     rtc_enabled: bool = False
@@ -467,6 +470,11 @@ def _ensure_human_inloop_compatible_features(
         "dtype": "float32",
         "shape": (1,),
         "names": ["state"],
+    }
+    dataset_features["complementary_info.intervention_stage"] = {
+        "dtype": "float32",
+        "shape": (1,),
+        "names": ["intervention_stage"],
     }
     dataset_features["complementary_info.phase"] = {"dtype": "float32", "shape": (1,), "names": ["phase"]}
 
@@ -811,6 +819,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 rl_phase_double_tap_window_s=cfg.rlt.rl_phase_double_tap_window_s,
                 start_in_teleop=cfg.rlt.start_in_teleop,
                 intervention_action_blend_time_s=cfg.rlt.intervention_action_blend_time_s,
+                two_stage_intervention=cfg.rlt.two_stage_intervention,
             )
 
         def _current_episode_frame_count() -> int:
