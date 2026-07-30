@@ -536,6 +536,46 @@ python -m evo_rlt.cli.recompute_dataset_stats \
 The command backs up the old `meta/stats.json` by default. Use `--check-only` to validate and
 preview q01/q99 coverage without changing the dataset.
 
+### Global-camera pose comparison
+
+Use the task1 static-background registration tool to compare the `top` view from two datasets:
+
+```bash
+python -m evo_rlt.cli.compare_camera_pose \
+  --reference-dataset-root /home/zty/catkin_ws/src/Evo-RLT/data/0723_expert_task1_v0_merged \
+  --target-dataset-root /home/zty/catkin_ws/src/Evo-RLT/data/0728_task1_v0_ac_iter0_online30/eval_vla_full_143752 \
+  --camera-key top \
+  --reference-episode 0 \
+  --target-episode 0 \
+  --output-dir /tmp/task1_top_0723_vs_0728
+```
+
+The report gives the similarity transform that maps the target image into the reference image.
+`raw_false_color.png` shows reference edges in red and target edges in green; overlap appears
+yellow. The default task1 mask removes the movable clip/sticker workspace and robot region.
+
+To adjust the physical camera against the 0723 reference in real time, stop any recorder that is
+using the camera and run:
+
+```bash
+python -m evo_rlt.cli.compare_camera_pose \
+  --reference-dataset-root /home/zty/catkin_ws/src/Evo-RLT/data/0723_expert_task1_v0_merged \
+  --target-camera /dev/v4l/by-path/pci-0000:00:14.0-usb-0:10.3:1.0-video-index0 \
+  --camera-key top \
+  --live \
+  --output-dir /tmp/task1_top_live_alignment
+```
+
+The default `--live-display auto` opens an OpenCV window when GUI support exists. With a headless
+OpenCV build it instead prints a local browser URL (default `http://127.0.0.1:8765`) and
+continuously updates `live_latest.jpg` plus `live_report.json`. Use `q` or Escape to close the
+OpenCV window, or `Ctrl+C` in the terminal to stop browser/terminal mode. The final comparison is
+saved automatically.
+
+For repeatable evaluation, target `status=aligned`: absolute rotation at most 0.5 degrees, center
+shift at most 5 pixels, and scale error at most 0.5 percent. After reinstalling editable entry
+points, the same tool is available as `evo-rlt-compare-camera-pose`.
+
 For local aggregation, use the Evo-RLT wrapper so that the merged dataset is repaired
 automatically after LeRobot copies its data and metadata:
 
