@@ -4,11 +4,11 @@ import copy
 import json
 from types import SimpleNamespace
 
-import torch
 import pytest
+import torch
 from safetensors.torch import save_file
 
-from evo_rlt.cli.audit_dynamic_beta import _build_heads, build_report
+from evo_rlt.cli.audit_dynamic_beta import _build_heads, build_report, td_correlation
 
 
 def test_dynamic_beta_audit_builds_head_only_report(tmp_path):
@@ -124,4 +124,62 @@ def test_dynamic_beta_audit_builds_head_only_report(tmp_path):
     assert report["gradients"]["bc_raw_grad_norm_mean"] > 0.0
     assert report["gradients"]["bc_weighted_grad_norm_mean"] > 0.0
     assert report["td_correlation"]["overall"]["count"] == 24
+    assert report["td_correlation"]["primary_metric"] == (
+        "proposal_disagreement_vs_td_center_abs"
+    )
+    assert report["td_correlation"]["circular_diagnostic"] == (
+        "proposal_disagreement_vs_td_avg_abs"
+    )
     assert torch.isfinite(torch.tensor(report["td_correlation"]["overall"]["spearman"]))
+    assert 0.0 <= report["td_correlation"]["overall"]["target_between_heads_frac"] <= 1.0
+
+
+def test_td_correlation_uses_non_circular_center_residual_as_primary():
+    class StubActor:
+        def __call__(self, state, reference, training=False):
+            return torch.zeros_like(reference), torch.zeros_like(reference)
+
+    class StubCritic:
+        def __call__(self, state, action):
+            return state[:, :1], state[:, 1:2]
+
+    class StubTargetCritic:
+        def min_q(self, state, action):
+            return torch.zeros(state.shape[0], 1)
+
+    # Q centers are [3, 2, 1] while disagreements are [1, 2, 3]. With target=0,
+    # the primary center residual is perfectly anti-correlated with disagreement.
+    states = [torch.tensor([4.0, 2.0]), torch.tensor([4.0, 0.0]), torch.tensor([4.0, -2.0])]
+    samples = [
+        {
+            "state_vec": state,
+            "exec_chunk": torch.zeros(1, 1),
+            "ref_chunk": torch.zeros(1, 1),
+            "reward_seq": torch.zeros(1),
+            "next_state_vec": torch.zeros(2),
+            "next_ref_chunk": torch.zeros(1, 1),
+            "done": torch.tensor(1.0),
+            "actual_steps": torch.tensor(1),
+            "source": torch.tensor(0),
+        }
+        for state in states
+    ]
+
+    result = td_correlation(
+        StubActor(),
+        StubCritic(),
+        StubTargetCritic(),
+        samples,
+        batch_size=3,
+        device="cpu",
+        gamma=0.99,
+        target_q_clip=100.0,
+    )
+    overall = result["overall"]
+
+    assert overall["spearman"] == pytest.approx(-1.0)
+    assert overall["pearson"] == pytest.approx(-1.0)
+    assert overall["td_abs_mean"] == pytest.approx(2.0)
+    assert overall["td_center_abs_mean"] == pytest.approx(2.0)
+    assert overall["td_avg_abs_circular_spearman"] != pytest.approx(-1.0)
+    assert overall["target_between_heads_frac"] == pytest.approx(2 / 3)

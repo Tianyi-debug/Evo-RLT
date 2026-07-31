@@ -233,7 +233,9 @@ def td_correlation(
     target_q_clip: float | None,
 ) -> dict:
     disagreements: list[Tensor] = []
-    td_residuals: list[Tensor] = []
+    td_center_residuals: list[Tensor] = []
+    td_avg_residuals: list[Tensor] = []
+    targets_between_heads: list[Tensor] = []
     sources: list[Tensor] = []
     for batch in _iter_batches(samples, batch_size, device):
         state = batch["state_vec"]
@@ -261,30 +263,52 @@ def td_correlation(
         ) * (1.0 - batch["done"].unsqueeze(-1)) * q_next
         target = reward + bootstrap
 
+        q_center_exec = (q1_exec + q2_exec) * 0.5
         disagreements.append(((q1_mu - q2_mu).abs() * 0.5).reshape(-1).cpu())
-        td_residuals.append(
+        td_center_residuals.append((q_center_exec - target).abs().reshape(-1).cpu())
+        td_avg_residuals.append(
             (
                 (q1_exec - target).abs()
                 + (q2_exec - target).abs()
             ).mul(0.5).reshape(-1).cpu()
         )
+        targets_between_heads.append(
+            (((target - q1_exec) * (target - q2_exec)) <= 0).float().reshape(-1).cpu()
+        )
         sources.append(batch["source"].reshape(-1).cpu())
 
     disagreement = torch.cat(disagreements)
-    td_residual = torch.cat(td_residuals)
+    td_center_residual = torch.cat(td_center_residuals)
+    td_avg_residual = torch.cat(td_avg_residuals)
+    target_between_heads = torch.cat(targets_between_heads)
     source = torch.cat(sources).long()
 
     def summarize(mask: Tensor) -> dict[str, float | int]:
         x = disagreement[mask]
-        y = td_residual[mask]
+        y_center = td_center_residual[mask]
+        y_avg = td_avg_residual[mask]
         return {
             "count": int(x.numel()),
-            "td_abs_mean": float(y.mean()),
-            "pearson": _correlation(x, y),
-            "spearman": _correlation(_average_ranks(x), _average_ranks(y)),
+            # Backward-compatible primary aliases now use the non-circular center residual.
+            "td_abs_mean": float(y_center.mean()),
+            "pearson": _correlation(x, y_center),
+            "spearman": _correlation(_average_ranks(x), _average_ranks(y_center)),
+            "td_center_abs_mean": float(y_center.mean()),
+            "td_avg_abs_circular_mean": float(y_avg.mean()),
+            "td_avg_abs_circular_pearson": _correlation(x, y_avg),
+            "td_avg_abs_circular_spearman": _correlation(
+                _average_ranks(x),
+                _average_ranks(y_avg),
+            ),
+            "target_between_heads_frac": float(target_between_heads[mask].mean()),
         }
 
-    result = {"overall": summarize(torch.ones_like(source, dtype=torch.bool)), "source": {}}
+    result = {
+        "primary_metric": "proposal_disagreement_vs_td_center_abs",
+        "circular_diagnostic": "proposal_disagreement_vs_td_avg_abs",
+        "overall": summarize(torch.ones_like(source, dtype=torch.bool)),
+        "source": {},
+    }
     for source_id in range(4):
         mask = source == source_id
         if bool(mask.any()):
