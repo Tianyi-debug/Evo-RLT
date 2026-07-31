@@ -27,7 +27,10 @@ from evo_rlt.adapters.lerobot.policies.vla_backbone import (
 )
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
-from evo_rlt.core.losses import actor_loss, critic_loss
+from evo_rlt.core.losses import (
+    actor_loss_with_diagnostics,
+    critic_loss_with_diagnostics,
+)
 from evo_rlt.core.phase_controller import PhaseController
 from evo_rlt.core.utils import soft_update
 
@@ -263,12 +266,17 @@ class ChunkACPolicy(PreTrainedPolicy):
         out["exec_chunk_flat"] = out["exec_chunk"].flatten(start_dim=-2)
         out["ref_chunk_flat"] = out["ref_chunk"].flatten(start_dim=-2)
         out["next_ref_flat"] = out["next_ref_chunk"].flatten(start_dim=-2)
+        if "source" in batch:
+            source = batch["source"]
+            if not isinstance(source, Tensor):
+                source = torch.as_tensor(source)
+            out["source"] = source
         return out
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict | None]:
         tx = self._coerce_batch(batch)
 
-        c_loss = critic_loss(
+        c_loss, critic_info = critic_loss_with_diagnostics(
             self.critic,
             self.target_critic,
             self.actor,
@@ -282,13 +290,15 @@ class ChunkACPolicy(PreTrainedPolicy):
 
         do_actor = (int(self._critic_step.item()) % self.config.actor_update_interval) == 0
         if do_actor:
-            a_loss = self._actor_loss_without_critic_grads(tx)
+            a_loss, actor_info = self._actor_loss_without_critic_grads(tx)
             total = c_loss + a_loss
             info = {
                 "loss": total.detach(),
                 "loss_critic": c_loss.detach(),
                 "loss_actor": a_loss.detach(),
                 "critic_step": self._critic_step.detach().clone(),
+                **critic_info,
+                **actor_info,
             }
             return total, info
 
@@ -296,15 +306,40 @@ class ChunkACPolicy(PreTrainedPolicy):
             "loss": c_loss.detach(),
             "loss_critic": c_loss.detach(),
             "critic_step": self._critic_step.detach().clone(),
+            **critic_info,
         }
         return c_loss, info
 
-    def _actor_loss_without_critic_grads(self, tx: dict[str, Tensor]) -> Tensor:
+    def _actor_loss_without_critic_grads(
+        self,
+        tx: dict[str, Tensor],
+    ) -> tuple[Tensor, dict[str, Tensor]]:
         critic_params = [p for p in self.critic.parameters() if p.requires_grad]
         for p in critic_params:
             p.requires_grad_(False)
         try:
-            return actor_loss(self.actor, self.critic, tx, beta=self.config.beta)
+            return actor_loss_with_diagnostics(
+                self.actor,
+                self.critic,
+                tx,
+                beta=self.config.beta,
+                weight_mode=getattr(self.config, "actor_bc_weight_mode", "fixed"),
+                uncertainty_tau_low=getattr(
+                    self.config,
+                    "actor_bc_uncertainty_tau_low",
+                    0.0,
+                ),
+                uncertainty_tau_high=getattr(
+                    self.config,
+                    "actor_bc_uncertainty_tau_high",
+                    1.0,
+                ),
+                uncertainty_kappa=getattr(
+                    self.config,
+                    "actor_bc_uncertainty_kappa",
+                    0.0,
+                ),
+            )
         finally:
             for p in critic_params:
                 p.requires_grad_(True)

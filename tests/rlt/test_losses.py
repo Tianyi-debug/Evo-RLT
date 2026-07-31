@@ -4,7 +4,12 @@ import torch
 import torch.nn.functional as F
 import pytest
 
-from evo_rlt.core.losses import discounted_chunk_return, critic_loss, actor_loss
+from evo_rlt.core.losses import (
+    actor_loss,
+    actor_loss_with_diagnostics,
+    critic_loss,
+    discounted_chunk_return,
+)
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
 from evo_rlt.core.utils import soft_update
@@ -100,6 +105,76 @@ def test_bc_term_scales_with_beta(actor, critic, batch):
     # We just check they're different and the high-beta one is larger
     # (BC reg is always non-negative, so adding it increases loss)
     assert loss_high.item() > loss_low.item()
+
+
+def test_fixed_actor_loss_diagnostics_match_legacy_formula(actor, critic, batch):
+    torch.manual_seed(123)
+    legacy = actor_loss(actor, critic, batch, beta=0.3)
+    torch.manual_seed(123)
+    loss, diagnostics = actor_loss_with_diagnostics(
+        actor,
+        critic,
+        batch,
+        beta=0.3,
+        weight_mode="fixed",
+    )
+
+    assert torch.equal(loss, legacy)
+    assert diagnostics["actor_beta_min"].item() == pytest.approx(0.3)
+    assert diagnostics["actor_beta_max"].item() == pytest.approx(0.3)
+    assert diagnostics["actor_rho_mean"].item() == 0.0
+
+
+def test_disagreement_actor_loss_uses_sample_level_detached_beta():
+    state = torch.zeros(3, 2)
+    ref = torch.zeros(3, 2)
+    mu = torch.tensor([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]], requires_grad=True)
+
+    class StubActor:
+        action_residual = False
+
+        def forward(self, state_vec, ref_chunk, training=False):
+            return mu, torch.zeros_like(mu)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            q1 = torch.tensor([[0.0], [0.0], [0.0]]) + action[:, :1] * 0.0
+            q2 = torch.tensor([[0.0], [1.0], [4.0]]) + action[:, :1] * 0.0
+            return q1, q2
+
+    loss, diagnostics = actor_loss_with_diagnostics(
+        StubActor(),
+        StubCritic(),
+        {"state_vec": state, "ref_chunk_flat": ref, "source": torch.tensor([0, 2, 3])},
+        beta=0.3,
+        weight_mode="disagreement",
+        uncertainty_tau_low=0.5,
+        uncertainty_tau_high=1.5,
+        uncertainty_kappa=3.0,
+    )
+
+    # u = [0, 0.5, 2], rho = [0, 0, 1], beta = [0.3, 0.3, 1.2].
+    assert diagnostics["actor_disagreement_mean"].item() == pytest.approx(2.5 / 3)
+    assert diagnostics["actor_beta_min"].item() == pytest.approx(0.3)
+    assert diagnostics["actor_beta_max"].item() == pytest.approx(1.2)
+    assert diagnostics["actor_rho_one_frac"].item() == pytest.approx(1 / 3)
+    assert not diagnostics["actor_beta_mean"].requires_grad
+    assert diagnostics["source_2_disagreement_mean"].item() == pytest.approx(0.5)
+    assert torch.isfinite(loss)
+
+
+def test_disagreement_actor_loss_rejects_invalid_schedule(actor, critic, batch):
+    with pytest.raises(ValueError, match="greater"):
+        actor_loss_with_diagnostics(
+            actor,
+            critic,
+            batch,
+            beta=0.3,
+            weight_mode="disagreement",
+            uncertainty_tau_low=1.0,
+            uncertainty_tau_high=1.0,
+            uncertainty_kappa=3.0,
+        )
 
 
 def test_target_is_stop_gradiented(actor, critic, target_critic, batch):

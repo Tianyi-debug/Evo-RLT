@@ -62,6 +62,10 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     # --- TD3+BC hyperparams ---
     gamma: float = 0.99
     beta: float = 0.3
+    actor_bc_weight_mode: str = "fixed"
+    actor_bc_uncertainty_tau_low: float = 0.0
+    actor_bc_uncertainty_tau_high: float = 1.0
+    actor_bc_uncertainty_kappa: float = 0.0
     tau: float = 0.005
     utd_ratio: int = 5
     actor_update_interval: int = 2
@@ -124,6 +128,25 @@ class ChunkACPolicyConfig(PreTrainedConfig):
         if self.ac_semantics_version not in (1, 2):
             raise ValueError(
                 f"ac_semantics_version must be 1 or 2, got {self.ac_semantics_version}"
+            )
+        if self.actor_bc_weight_mode not in ("fixed", "disagreement"):
+            raise ValueError(
+                "actor_bc_weight_mode must be 'fixed' or 'disagreement', "
+                f"got {self.actor_bc_weight_mode!r}"
+            )
+        if self.actor_bc_uncertainty_kappa < 0:
+            raise ValueError(
+                "actor_bc_uncertainty_kappa must be non-negative, "
+                f"got {self.actor_bc_uncertainty_kappa}"
+            )
+        if (
+            self.actor_bc_weight_mode == "disagreement"
+            and self.actor_bc_uncertainty_tau_high
+            <= self.actor_bc_uncertainty_tau_low
+        ):
+            raise ValueError(
+                "actor_bc_uncertainty_tau_high must be greater than "
+                "actor_bc_uncertainty_tau_low in disagreement mode"
             )
 
     @property

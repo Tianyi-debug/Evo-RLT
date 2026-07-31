@@ -231,6 +231,72 @@ def test_transition_cache_v2_mixed_provenance_repairs_human_reference():
     assert torch.equal(transitions[0].next_ref_chunk, exec_chunks[2])
 
 
+def test_transition_cache_v2_vla_mode_preserves_human_reference():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    chunk_length = 2
+    frame_indices = [0, 1, 2, 3, 4]
+    ref_chunks = torch.arange(5 * 2 * 2, dtype=torch.float32).view(5, 2, 2)
+    exec_chunks = -ref_chunks - 1
+    provenance = module.FrameProvenance(
+        is_intervention=torch.tensor([0.0, 0.0, 1.0, 1.0, 1.0]),
+        collector_policy_id=torch.tensor([2, 2, 0, 0, 0]),
+    )
+
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.randn(5, 4),
+        ref_chunks=ref_chunks,
+        exec_chunks=exec_chunks,
+        frame_indices=frame_indices,
+        episode_last_frame=4,
+        chunk_length=chunk_length,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=60,
+        provenance=provenance,
+        human_reference_mode="vla",
+    )
+
+    assert transitions[1].source.item() == module.TRANSITION_SOURCE_HUMAN_OVERRIDE
+    assert transitions[1].intervention.item() == 1.0
+    assert torch.equal(transitions[1].exec_chunk, exec_chunks[1])
+    assert torch.equal(transitions[1].ref_chunk, ref_chunks[1])
+    assert torch.equal(transitions[0].next_ref_chunk, ref_chunks[2])
+
+
+def test_transition_cache_v2_drop_legacy_handoff_and_invalid_bootstrap():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    chunk_length = 2
+    frame_indices = list(range(7))
+    provenance = module.FrameProvenance(
+        is_intervention=torch.tensor([0, 0, 0, 1, 1, 1, 1], dtype=torch.float32),
+        collector_policy_id=torch.tensor([2, 2, 2, 0, 0, 0, 0]),
+    )
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.arange(7 * 4, dtype=torch.float32).view(7, 4),
+        ref_chunks=torch.randn(7, chunk_length, 2),
+        exec_chunks=torch.randn(7, chunk_length, 2),
+        frame_indices=frame_indices,
+        episode_last_frame=6,
+        chunk_length=chunk_length,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=62,
+        provenance=provenance,
+        human_reference_mode="vla",
+        legacy_handoff_policy="drop",
+    )
+
+    # start=2 crosses the handoff; start=0 bootstraps into that invalid anchor.
+    assert [int(transition.state_vec[0].item() // 4) for transition in transitions] == [1, 3, 4]
+    assert transitions[0].source.item() == module.TRANSITION_SOURCE_RL_AUTONOMOUS
+    assert all(
+        transition.source.item() == module.TRANSITION_SOURCE_HUMAN_OVERRIDE
+        for transition in transitions[1:]
+    )
+
+
 def test_transition_cache_v2_excludes_two_stage_hold_and_handoff_chunks():
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 

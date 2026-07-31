@@ -110,6 +110,26 @@ def parse_args() -> argparse.Namespace:
             "(demo/online-vla/online-rl, success/failure) instead of one global shuffle."
         ),
     )
+    p.add_argument(
+        "--human-reference-mode",
+        choices=["executed", "vla"],
+        default="executed",
+        help=(
+            "Reference stored for human-override chunks. 'executed' preserves the "
+            "existing HIL behavior; 'vla' keeps the independently generated VLA "
+            "proposal for uncertainty-weighted VLA-BC."
+        ),
+    )
+    p.add_argument(
+        "--legacy-handoff-policy",
+        choices=["majority", "drop"],
+        default="majority",
+        help=(
+            "How to handle old datasets without intervention_stage. 'majority' "
+            "preserves existing chunk voting; 'drop' removes chunks crossing a "
+            "policy/human boundary and transitions that bootstrap into one."
+        ),
+    )
     return p.parse_args()
 
 
@@ -213,6 +233,7 @@ def _chunk_provenance(
     provenance: FrameProvenance,
     start_frame: int,
     chunk_length: int,
+    legacy_handoff_policy: str = "majority",
 ) -> tuple[int, bool, bool]:
     intervention = provenance.is_intervention[start_frame : start_frame + chunk_length]
     if intervention.numel() != chunk_length:
@@ -240,6 +261,13 @@ def _chunk_provenance(
             # is a safety transition rather than policy or human supervision.
             return TRANSITION_SOURCE_DEMO, False, False
     else:
+        if legacy_handoff_policy == "drop":
+            is_policy_chunk = bool(torch.all(intervention <= 0.5))
+            is_teleop_chunk = bool(torch.all(intervention > 0.5))
+            if is_teleop_chunk:
+                return TRANSITION_SOURCE_HUMAN_OVERRIDE, True, True
+            if not is_policy_chunk:
+                return TRANSITION_SOURCE_DEMO, False, False
         human_frames = int((intervention > 0.5).sum().item())
         human_override = human_frames >= chunk_length - human_frames
         if human_override:
@@ -398,6 +426,8 @@ def _encoded_episode_to_transitions(
     episode_success: bool,
     ep_id: int,
     provenance: FrameProvenance | None = None,
+    human_reference_mode: str = "executed",
+    legacy_handoff_policy: str = "majority",
 ) -> list[ChunkTransition]:
     if not (state_vecs.shape[0] == ref_chunks.shape[0] == exec_chunks.shape[0] == len(frame_indices)):
         raise ValueError(
@@ -440,11 +470,12 @@ def _encoded_episode_to_transitions(
             provenance,
             start_frame,
             chunk_length,
+            legacy_handoff_policy=legacy_handoff_policy,
         )
         usable_by_anchor[start_frame] = usable
         transition.source = torch.tensor(source)
         transition.intervention = torch.tensor(float(human_override))
-        if human_override:
+        if human_override and human_reference_mode == "executed":
             transition.ref_chunk = transition.exec_chunk.clone()
 
     # A target action is conditioned on x_{t+C}. If that next anchor is a
@@ -456,7 +487,11 @@ def _encoded_episode_to_transitions(
         if next_index is not None and usable_by_anchor[start_anchors[next_index]]:
             transition.next_ref_chunk = transitions[next_index].ref_chunk.clone()
 
-    if provenance.intervention_stage is None:
+    should_filter = (
+        provenance.intervention_stage is not None
+        or legacy_handoff_policy == "drop"
+    )
+    if not should_filter:
         return transitions
 
     filtered: list[ChunkTransition] = []
@@ -496,6 +531,8 @@ def _encode_episode(
     frame_stride: int,
     episode_success: bool,
     provenance: FrameProvenance | None,
+    human_reference_mode: str,
+    legacy_handoff_policy: str,
 ) -> list[ChunkTransition]:
     """Encode sampled episode frames and build paper-style C-step transitions."""
     if not frame_indices:
@@ -555,6 +592,26 @@ def _encode_episode(
         episode_success=episode_success,
         ep_id=ep_id,
         provenance=provenance,
+        human_reference_mode=human_reference_mode,
+        legacy_handoff_policy=legacy_handoff_policy,
+    )
+
+
+def _transition_summary(transitions: list[ChunkTransition]) -> str:
+    source_counts: dict[int, int] = {}
+    success_terminal = 0
+    failure_terminal = 0
+    for transition in transitions:
+        source = int(transition.source.item())
+        source_counts[source] = source_counts.get(source, 0) + 1
+        if bool(transition.done.item()):
+            if float(transition.reward_seq.sum().item()) > 0:
+                success_terminal += 1
+            else:
+                failure_terminal += 1
+    return (
+        f"sources={dict(sorted(source_counts.items()))} "
+        f"terminal_success={success_terminal} terminal_failure={failure_terminal}"
     )
 
 
@@ -691,10 +748,24 @@ def main() -> None:
                     frame_stride=args.frame_stride,
                     episode_success=episode_success,
                     provenance=provenance,
+                    human_reference_mode=args.human_reference_mode,
+                    legacy_handoff_policy=args.legacy_handoff_policy,
                 )
+                raw_transition_count = sum(
+                    1
+                    for frame in frame_indices
+                    if frame + args.chunk_length <= ep_to - 1
+                )
+                dropped = raw_transition_count - len(ep_tx)
+                if dropped:
+                    _log(
+                        f"    ep{ep_id}: filtered {dropped}/{raw_transition_count} "
+                        "handoff-boundary transitions"
+                    )
                 all_tx.extend(ep_tx)
                 if (k + 1) % 5 == 0 or (k + 1) == len(eps):
                     _save_partial(out_dir, split_name, all_tx, f"{split_name} ep {k+1}/{len(eps)}")
+            _log(f"  [{split_name}] final {_transition_summary(all_tx)}")
     finally:
         capture.detach()
 
