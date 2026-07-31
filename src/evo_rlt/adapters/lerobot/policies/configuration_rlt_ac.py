@@ -66,6 +66,13 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     actor_bc_uncertainty_tau_low: float = 0.0
     actor_bc_uncertainty_tau_high: float = 1.0
     actor_bc_uncertainty_kappa: float = 0.0
+    actor_bc_uncertainty_threshold_mode: str = "fixed"
+    actor_bc_uncertainty_ema_decay: float = 0.95
+    actor_bc_uncertainty_min_gap: float = 1e-6
+    critic_bootstrap_mode: str = "none"
+    critic_bootstrap_keep_prob: float = 0.8
+    critic_bootstrap_seed: int = 1000
+    diagnostics_jsonl_path: str | None = None
     tau: float = 0.005
     utd_ratio: int = 5
     actor_update_interval: int = 2
@@ -138,6 +145,35 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 "actor_bc_uncertainty_kappa must be non-negative, "
                 f"got {self.actor_bc_uncertainty_kappa}"
+            )
+        if self.actor_bc_uncertainty_threshold_mode not in ("fixed", "ema_quantile"):
+            raise ValueError(
+                "actor_bc_uncertainty_threshold_mode must be 'fixed' or "
+                f"'ema_quantile', got {self.actor_bc_uncertainty_threshold_mode!r}"
+            )
+        if not 0.0 <= self.actor_bc_uncertainty_ema_decay < 1.0:
+            raise ValueError(
+                "actor_bc_uncertainty_ema_decay must be within [0, 1), "
+                f"got {self.actor_bc_uncertainty_ema_decay}"
+            )
+        if self.actor_bc_uncertainty_min_gap <= 0:
+            raise ValueError(
+                "actor_bc_uncertainty_min_gap must be positive, "
+                f"got {self.actor_bc_uncertainty_min_gap}"
+            )
+        if self.critic_bootstrap_mode not in ("none", "fixed_bernoulli"):
+            raise ValueError(
+                "critic_bootstrap_mode must be 'none' or 'fixed_bernoulli', "
+                f"got {self.critic_bootstrap_mode!r}"
+            )
+        if not 0.0 < self.critic_bootstrap_keep_prob <= 1.0:
+            raise ValueError(
+                "critic_bootstrap_keep_prob must be within (0, 1], "
+                f"got {self.critic_bootstrap_keep_prob}"
+            )
+        if self.critic_bootstrap_seed < 0:
+            raise ValueError(
+                f"critic_bootstrap_seed must be non-negative, got {self.critic_bootstrap_seed}"
             )
         if (
             self.actor_bc_weight_mode == "disagreement"

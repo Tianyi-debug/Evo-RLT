@@ -34,6 +34,9 @@ def critic_loss(
     gamma: float,
     C: int,
     target_q_clip: float | None = 100.0,
+    bootstrap_mode: str = "none",
+    bootstrap_keep_prob: float = 0.8,
+    bootstrap_seed: int = 1000,
 ) -> torch.Tensor:
     loss, _ = critic_loss_with_diagnostics(
         critic=critic,
@@ -43,8 +46,51 @@ def critic_loss(
         gamma=gamma,
         C=C,
         target_q_clip=target_q_clip,
+        bootstrap_mode=bootstrap_mode,
+        bootstrap_keep_prob=bootstrap_keep_prob,
+        bootstrap_seed=bootstrap_seed,
     )
     return loss
+
+
+def fixed_bootstrap_mask(
+    cache_index: torch.Tensor,
+    *,
+    head_id: int,
+    keep_prob: float,
+    seed: int,
+) -> torch.Tensor:
+    """Return a deterministic Bernoulli-like mask for one critic head."""
+    if head_id not in (0, 1):
+        raise ValueError(f"head_id must be 0 or 1, got {head_id}")
+    if not 0.0 < keep_prob <= 1.0:
+        raise ValueError(f"keep_prob must be within (0, 1], got {keep_prob}")
+    if seed < 0:
+        raise ValueError(f"seed must be non-negative, got {seed}")
+
+    index = cache_index.detach().reshape(-1).to(dtype=torch.int64)
+    modulus = 2_147_483_647
+    if head_id == 0:
+        multiplier, increment = 1_103_515_245, 12_345
+    else:
+        multiplier, increment = 1_664_525, 1_013_904_223
+    seed_offset = (seed * 2_654_435_761) % modulus
+    hashed = torch.remainder((index + 1 + seed_offset) * multiplier + increment, modulus)
+    mask = hashed.to(dtype=torch.float64) < keep_prob * modulus
+    if mask.numel() > 0 and not bool(mask.any()):
+        mask = mask.clone()
+        mask[int(hashed.argmin().item())] = True
+    return mask
+
+
+def _masked_mean_squared_error(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+) -> torch.Tensor:
+    per_sample = (prediction - target).square().reshape(prediction.shape[0], -1).mean(dim=1)
+    weights = mask.to(device=prediction.device, dtype=per_sample.dtype)
+    return (per_sample * weights).sum() / weights.sum()
 
 
 def critic_loss_with_diagnostics(
@@ -55,6 +101,9 @@ def critic_loss_with_diagnostics(
     gamma: float,
     C: int,
     target_q_clip: float | None = 100.0,
+    bootstrap_mode: str = "none",
+    bootstrap_keep_prob: float = 0.8,
+    bootstrap_seed: int = 1000,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """TD3-style chunk-level TD loss with correct truncated-chunk handling.
 
@@ -87,7 +136,36 @@ def critic_loss_with_diagnostics(
         target = r + bootstrap
 
     q1, q2 = critic(x, a)
-    loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
+    if bootstrap_mode == "none":
+        q1_mask = torch.ones(q1.shape[0], dtype=torch.bool, device=q1.device)
+        q2_mask = torch.ones(q2.shape[0], dtype=torch.bool, device=q2.device)
+        loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
+    elif bootstrap_mode == "fixed_bernoulli":
+        if "cache_index" not in batch:
+            raise KeyError("fixed_bernoulli critic bootstrap requires batch['cache_index']")
+        cache_index = batch["cache_index"].to(q1.device)
+        q1_mask = fixed_bootstrap_mask(
+            cache_index,
+            head_id=0,
+            keep_prob=bootstrap_keep_prob,
+            seed=bootstrap_seed,
+        )
+        q2_mask = fixed_bootstrap_mask(
+            cache_index,
+            head_id=1,
+            keep_prob=bootstrap_keep_prob,
+            seed=bootstrap_seed,
+        )
+        loss = _masked_mean_squared_error(q1, target, q1_mask) + _masked_mean_squared_error(
+            q2,
+            target,
+            q2_mask,
+        )
+    else:
+        raise ValueError(
+            "bootstrap_mode must be 'none' or 'fixed_bernoulli', "
+            f"got {bootstrap_mode!r}"
+        )
     diagnostics = {
         "critic_q1_exec_mean": q1.detach().mean(),
         "critic_q2_exec_mean": q2.detach().mean(),
@@ -98,6 +176,10 @@ def critic_loss_with_diagnostics(
             * 0.5
         ).mean(),
         "critic_exec_disagreement_mean": ((q1.detach() - q2.detach()).abs() * 0.5).mean(),
+        "critic_bootstrap_q1_frac": q1_mask.float().mean(),
+        "critic_bootstrap_q2_frac": q2_mask.float().mean(),
+        "critic_bootstrap_overlap_frac": (q1_mask & q2_mask).float().mean(),
+        "critic_bootstrap_union_frac": (q1_mask | q2_mask).float().mean(),
     }
     return loss, diagnostics
 

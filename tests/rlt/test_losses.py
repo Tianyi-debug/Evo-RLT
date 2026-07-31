@@ -8,7 +8,9 @@ from evo_rlt.core.losses import (
     actor_loss,
     actor_loss_with_diagnostics,
     critic_loss,
+    critic_loss_with_diagnostics,
     discounted_chunk_return,
+    fixed_bootstrap_mask,
 )
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
@@ -87,6 +89,140 @@ def test_critic_loss_scalar(actor, critic, target_critic, batch):
     loss = critic_loss(critic, target_critic, actor, batch, gamma=0.99, C=C)
     assert loss.shape == ()
     assert not torch.isnan(loss)
+
+
+def test_bootstrap_none_is_exactly_the_legacy_default(actor, critic, target_critic, batch):
+    default_loss, default_info = critic_loss_with_diagnostics(
+        critic,
+        target_critic,
+        actor,
+        batch,
+        gamma=0.99,
+        C=C,
+    )
+    explicit_loss, explicit_info = critic_loss_with_diagnostics(
+        critic,
+        target_critic,
+        actor,
+        batch,
+        gamma=0.99,
+        C=C,
+        bootstrap_mode="none",
+    )
+
+    assert torch.equal(default_loss, explicit_loss)
+    assert default_info.keys() == explicit_info.keys()
+    for key in default_info:
+        assert torch.equal(default_info[key], explicit_info[key])
+
+
+def test_fixed_bootstrap_masks_are_stable_and_head_specific():
+    cache_index = torch.arange(10_000)
+
+    q1_first = fixed_bootstrap_mask(
+        cache_index,
+        head_id=0,
+        keep_prob=0.8,
+        seed=1000,
+    )
+    q1_second = fixed_bootstrap_mask(
+        cache_index,
+        head_id=0,
+        keep_prob=0.8,
+        seed=1000,
+    )
+    q2 = fixed_bootstrap_mask(
+        cache_index,
+        head_id=1,
+        keep_prob=0.8,
+        seed=1000,
+    )
+
+    assert torch.equal(q1_first, q1_second)
+    assert not torch.equal(q1_first, q2)
+    assert q1_first.float().mean().item() == pytest.approx(0.8, abs=0.02)
+    assert q2.float().mean().item() == pytest.approx(0.8, abs=0.02)
+
+
+def test_fixed_bootstrap_loss_is_normalized_per_head():
+    class StubActor:
+        def forward(self, state_vec, ref_chunk, training=False):
+            return torch.zeros_like(ref_chunk), torch.zeros_like(ref_chunk)
+
+    class StubTarget:
+        def min_q(self, state_vec, action):
+            return torch.zeros(state_vec.shape[0], 1)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            return state_vec[:, :1], state_vec[:, 1:2]
+
+    state = torch.arange(1, 17, dtype=torch.float32).reshape(8, 2)
+    cache_index = torch.arange(20, 28)
+    stub_batch = {
+        "state_vec": state,
+        "exec_chunk_flat": torch.zeros(8, 1),
+        "ref_chunk_flat": torch.zeros(8, 1),
+        "reward_seq": torch.zeros(8, 1),
+        "next_state_vec": torch.zeros(8, 2),
+        "next_ref_flat": torch.zeros(8, 1),
+        "done": torch.ones(8),
+        "actual_steps": torch.ones(8, dtype=torch.long),
+        "cache_index": cache_index,
+    }
+    q1_mask = fixed_bootstrap_mask(
+        cache_index,
+        head_id=0,
+        keep_prob=0.5,
+        seed=9,
+    )
+    q2_mask = fixed_bootstrap_mask(
+        cache_index,
+        head_id=1,
+        keep_prob=0.5,
+        seed=9,
+    )
+
+    loss, diagnostics = critic_loss_with_diagnostics(
+        StubCritic(),
+        StubTarget(),
+        StubActor(),
+        stub_batch,
+        gamma=0.99,
+        C=1,
+        bootstrap_mode="fixed_bernoulli",
+        bootstrap_keep_prob=0.5,
+        bootstrap_seed=9,
+    )
+    expected = state[q1_mask, 0].square().mean() + state[q2_mask, 1].square().mean()
+
+    assert torch.equal(loss, expected)
+    assert diagnostics["critic_bootstrap_q1_frac"].item() == pytest.approx(
+        q1_mask.float().mean().item()
+    )
+    assert diagnostics["critic_bootstrap_q2_frac"].item() == pytest.approx(
+        q2_mask.float().mean().item()
+    )
+
+
+def test_fixed_bootstrap_empty_batch_mask_gets_one_deterministic_sample():
+    cache_index = torch.arange(8)
+
+    first = fixed_bootstrap_mask(
+        cache_index,
+        head_id=0,
+        keep_prob=1e-12,
+        seed=1000,
+    )
+    second = fixed_bootstrap_mask(
+        cache_index,
+        head_id=0,
+        keep_prob=1e-12,
+        seed=1000,
+    )
+
+    assert first.sum().item() == 1
+    assert torch.equal(first, second)
 
 
 def test_actor_loss_scalar(actor, critic, batch):

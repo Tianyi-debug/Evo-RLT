@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import json
 from types import SimpleNamespace
 
 import torch
+import pytest
 from safetensors.torch import save_file
 
 from evo_rlt.cli.audit_dynamic_beta import _build_heads, build_report
@@ -38,6 +40,13 @@ def test_dynamic_beta_audit_builds_head_only_report(tmp_path):
         "critic_layer_norm": True,
         "critic_residual": False,
         "ac_semantics_version": 2,
+        "gamma": 0.99,
+        "target_q_clip": 100.0,
+        "actor_bc_uncertainty_threshold_mode": "ema_quantile",
+        "actor_bc_uncertainty_min_gap": 1e-6,
+        "critic_bootstrap_mode": "fixed_bernoulli",
+        "critic_bootstrap_keep_prob": 0.8,
+        "critic_bootstrap_seed": 1000,
     }
     (policy_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
     actor, critic = _build_heads(config)
@@ -48,6 +57,12 @@ def test_dynamic_beta_audit_builds_head_only_report(tmp_path):
     weights = {
         **{f"actor.{key}": value for key, value in actor.state_dict().items()},
         **{f"critic.{key}": value for key, value in critic.state_dict().items()},
+        **{
+            f"target_critic.{key}": value
+            for key, value in copy.deepcopy(critic).state_dict().items()
+        },
+        "_actor_bc_tau_low_ema": torch.tensor(0.01),
+        "_actor_bc_tau_high_ema": torch.tensor(0.2),
     }
     save_file(weights, policy_path / "model.safetensors")
 
@@ -98,9 +113,15 @@ def test_dynamic_beta_audit_builds_head_only_report(tmp_path):
     assert report["checks"]["beta_within_expected_range"] is True
     assert report["checks"]["actor_ref_delta_within_bound"] is True
     assert report["tau_high"] > report["tau_low"]
+    assert report["tau_low"] == pytest.approx(0.01)
+    assert report["tau_high"] == pytest.approx(0.2)
+    assert report["threshold_mode"] == "ema_quantile"
+    assert report["critic_bootstrap_mode"] == "fixed_bernoulli"
     assert 0.3 <= report["training"]["beta_matched"] <= 1.2
     assert report["training"]["actor_ref_delta_abs"]["max"] <= 0.1 + 1e-6
     assert report["training"]["source"]["3"]["count"] > 0
     assert report["gradients"]["q_grad_norm_mean"] > 0.0
     assert report["gradients"]["bc_raw_grad_norm_mean"] > 0.0
     assert report["gradients"]["bc_weighted_grad_norm_mean"] > 0.0
+    assert report["td_correlation"]["overall"]["count"] == 24
+    assert torch.isfinite(torch.tensor(report["td_correlation"]["overall"]["spearman"]))

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import copy
+import json
+import math
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_ac import ChunkACPolicy
@@ -10,7 +13,12 @@ from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
 
 
-def _head_only_policy() -> ChunkACPolicy:
+def _head_only_policy(
+    *,
+    ema: bool = False,
+    diagnostics_jsonl_path: str | None = None,
+    bootstrap: bool = False,
+) -> ChunkACPolicy:
     policy = object.__new__(ChunkACPolicy)
     torch.nn.Module.__init__(policy)
     policy.config = SimpleNamespace(
@@ -24,6 +32,13 @@ def _head_only_policy() -> ChunkACPolicy:
         actor_bc_uncertainty_tau_low=0.0,
         actor_bc_uncertainty_tau_high=0.2,
         actor_bc_uncertainty_kappa=3.0,
+        actor_bc_uncertainty_threshold_mode="ema_quantile" if ema else "fixed",
+        actor_bc_uncertainty_ema_decay=0.5,
+        actor_bc_uncertainty_min_gap=1e-6,
+        critic_bootstrap_mode="fixed_bernoulli" if bootstrap else "none",
+        critic_bootstrap_keep_prob=0.8,
+        critic_bootstrap_seed=1000,
+        diagnostics_jsonl_path=diagnostics_jsonl_path,
     )
     policy.actor = ChunkActor(
         state_dim=6,
@@ -46,6 +61,9 @@ def _head_only_policy() -> ChunkACPolicy:
     for parameter in policy.target_critic.parameters():
         parameter.requires_grad_(False)
     policy.register_buffer("_critic_step", torch.zeros((), dtype=torch.long))
+    policy.register_buffer("_actor_bc_tau_low_ema", torch.tensor(0.0))
+    policy.register_buffer("_actor_bc_tau_high_ema", torch.tensor(0.2))
+    policy._diagnostics_jsonl_initialized = False
     return policy
 
 
@@ -61,6 +79,7 @@ def _batch() -> dict[str, torch.Tensor]:
         "done": torch.zeros(batch_size),
         "actual_steps": torch.full((batch_size,), 2),
         "source": torch.tensor([0, 0, 1, 1, 2, 2, 3, 3]),
+        "cache_index": torch.arange(batch_size),
     }
 
 
@@ -80,8 +99,11 @@ def test_dynamic_policy_forward_emits_finite_metrics():
         "critic_td_abs_mean",
         "source_3_beta_mean",
     ):
-        assert info[key].shape == ()
-        assert torch.isfinite(info[key])
+        assert isinstance(info[key], float)
+        assert math.isfinite(info[key])
+    assert "loss" not in info
+    assert isinstance(info["loss_total_step"], float)
+    assert info["actor_update"] is True
 
 
 def test_actor_only_backward_does_not_accumulate_critic_gradients():
@@ -93,3 +115,63 @@ def test_actor_only_backward_does_not_accumulate_critic_gradients():
 
     assert any(parameter.grad is not None for parameter in policy.actor.parameters())
     assert all(parameter.grad is None for parameter in policy.critic.parameters())
+
+
+def test_ema_thresholds_are_used_before_batch_quantiles_update_them():
+    policy = _head_only_policy(ema=True)
+    tx = policy._coerce_batch(_batch())
+
+    _, info = policy._actor_loss_without_critic_grads(tx)
+
+    assert info["actor_tau_low_used"].item() == pytest.approx(0.0)
+    assert info["actor_tau_high_used"].item() == pytest.approx(0.2)
+    expected_low = 0.5 * info["actor_disagreement_p50"].item()
+    expected_high = 0.5 * 0.2 + 0.5 * info["actor_disagreement_p95"].item()
+    expected_high = max(expected_high, expected_low + 1e-6)
+    assert policy._actor_bc_tau_low_ema.item() == pytest.approx(expected_low)
+    assert policy._actor_bc_tau_high_ema.item() == pytest.approx(expected_high)
+    assert info["actor_tau_low_updated"].item() == pytest.approx(expected_low)
+    assert info["actor_tau_high_updated"].item() == pytest.approx(expected_high)
+
+
+def test_ema_threshold_buffers_round_trip_with_state_dict():
+    policy = _head_only_policy(ema=True)
+    policy._actor_bc_tau_low_ema.fill_(0.123)
+    policy._actor_bc_tau_high_ema.fill_(0.456)
+    state = copy.deepcopy(policy.state_dict())
+
+    restored = _head_only_policy(ema=True)
+    restored.load_state_dict(state)
+
+    assert restored._actor_bc_tau_low_ema.item() == pytest.approx(0.123)
+    assert restored._actor_bc_tau_high_ema.item() == pytest.approx(0.456)
+
+
+def test_jsonl_records_every_critic_step_and_actor_frequency(tmp_path):
+    path = tmp_path / "diagnostics" / "train.jsonl"
+    policy = _head_only_policy(
+        ema=True,
+        diagnostics_jsonl_path=str(path),
+        bootstrap=True,
+    )
+    policy.config.actor_update_interval = 2
+
+    _, first_info = policy.forward(_batch())
+    _, second_info = policy.forward(_batch())
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+
+    assert first_info["actor_update"] is False
+    assert second_info["actor_update"] is True
+    assert [row["critic_step"] for row in rows] == [1, 2]
+    assert [row["actor_update"] for row in rows] == [False, True]
+    assert "loss_actor" not in rows[0]
+    assert rows[0]["source_0_frac"] == pytest.approx(0.25)
+    assert rows[0]["source_3_frac"] == pytest.approx(0.25)
+    assert "actor_beta_mean" in rows[1]
+    assert "actor_tau_low_used" in rows[1]
+    assert "critic_bootstrap_overlap_frac" in rows[0]
+    assert all(
+        not isinstance(value, (list, dict))
+        for row in rows
+        for value in row.values()
+    )

@@ -14,6 +14,7 @@ from torch import Tensor
 
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
+from evo_rlt.core.losses import discounted_chunk_return
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +96,35 @@ def load_heads(
     return actor, critic, config
 
 
+def load_target_critic(
+    policy_path: str | Path,
+    config: dict,
+    device: str,
+) -> TwinCritic:
+    _, target_critic = _build_heads(config)
+    weights_path = Path(policy_path) / "model.safetensors"
+    weights = load_file(weights_path, device="cpu")
+    state_dict = {
+        key.removeprefix("target_critic."): value
+        for key, value in weights.items()
+        if key.startswith("target_critic.")
+    }
+    if not state_dict:
+        raise KeyError(f"No target_critic weights found in {weights_path}")
+    target_critic.load_state_dict(state_dict)
+    return target_critic.to(device).eval()
+
+
+def load_checkpoint_thresholds(policy_path: str | Path) -> tuple[float, float] | None:
+    weights_path = Path(policy_path) / "model.safetensors"
+    weights = load_file(weights_path, device="cpu")
+    low = weights.get("_actor_bc_tau_low_ema")
+    high = weights.get("_actor_bc_tau_high_ema")
+    if low is None or high is None:
+        return None
+    return float(low.item()), float(high.item())
+
+
 def _load_samples(
     cache_dir: str | Path,
     split: str,
@@ -116,8 +146,20 @@ def _load_samples(
 def _batch(samples: list[dict[str, Tensor]], device: str) -> dict[str, Tensor]:
     return {
         "state_vec": torch.stack([sample["state_vec"] for sample in samples]).to(device),
+        "exec_chunk_flat": torch.stack([sample["exec_chunk"] for sample in samples])
+        .flatten(start_dim=-2)
+        .to(device),
         "ref_chunk_flat": torch.stack([sample["ref_chunk"] for sample in samples])
         .flatten(start_dim=-2)
+        .to(device),
+        "reward_seq": torch.stack([sample["reward_seq"] for sample in samples]).to(device),
+        "next_state_vec": torch.stack([sample["next_state_vec"] for sample in samples]).to(device),
+        "next_ref_flat": torch.stack([sample["next_ref_chunk"] for sample in samples])
+        .flatten(start_dim=-2)
+        .to(device),
+        "done": torch.stack([sample["done"] for sample in samples]).reshape(-1).to(device),
+        "actual_steps": torch.stack([sample["actual_steps"] for sample in samples])
+        .reshape(-1)
         .to(device),
         "source": torch.stack(
             [sample.get("source", torch.tensor(0)) for sample in samples]
@@ -145,6 +187,111 @@ def _quantiles(values: Tensor) -> dict[str, float]:
         "p99": float(torch.quantile(values, 0.99)),
         "max": float(values.max()),
     }
+
+
+def _correlation(x: Tensor, y: Tensor) -> float:
+    x = x.detach().float().reshape(-1).cpu()
+    y = y.detach().float().reshape(-1).cpu()
+    if x.numel() != y.numel():
+        raise ValueError(f"Correlation inputs differ in size: {x.numel()} != {y.numel()}")
+    if x.numel() < 2:
+        return 0.0
+    x = x - x.mean()
+    y = y - y.mean()
+    denominator = torch.sqrt(x.square().sum() * y.square().sum())
+    if float(denominator) == 0.0:
+        return 0.0
+    return float((x * y).sum() / denominator)
+
+
+def _average_ranks(values: Tensor) -> Tensor:
+    values = values.detach().float().reshape(-1).cpu()
+    order = torch.argsort(values, stable=True)
+    sorted_values = values[order]
+    ranks = torch.empty_like(values)
+    if values.numel() == 0:
+        return ranks
+
+    change = torch.ones(values.numel(), dtype=torch.bool)
+    change[1:] = sorted_values[1:] != sorted_values[:-1]
+    starts = torch.nonzero(change, as_tuple=False).reshape(-1)
+    stops = torch.cat([starts[1:], torch.tensor([values.numel()])])
+    for start, stop in zip(starts.tolist(), stops.tolist(), strict=True):
+        ranks[order[start:stop]] = (start + stop - 1) * 0.5
+    return ranks
+
+
+@torch.no_grad()
+def td_correlation(
+    actor: ChunkActor,
+    critic: TwinCritic,
+    target_critic: TwinCritic,
+    samples: list[dict[str, Tensor]],
+    batch_size: int,
+    device: str,
+    gamma: float,
+    target_q_clip: float | None,
+) -> dict:
+    disagreements: list[Tensor] = []
+    td_residuals: list[Tensor] = []
+    sources: list[Tensor] = []
+    for batch in _iter_batches(samples, batch_size, device):
+        state = batch["state_vec"]
+        ref = batch["ref_chunk_flat"]
+        mu, _ = actor(state, ref, training=False)
+        q1_mu, q2_mu = critic(state, mu)
+
+        q1_exec, q2_exec = critic(state, batch["exec_chunk_flat"])
+        mu_next, _ = actor(
+            batch["next_state_vec"],
+            batch["next_ref_flat"],
+            training=False,
+        )
+        mu_next = mu_next.clamp(-1.0, 1.0)
+        q_next = target_critic.min_q(batch["next_state_vec"], mu_next)
+        if target_q_clip is not None and target_q_clip > 0:
+            q_next = q_next.clamp(-target_q_clip, target_q_clip)
+        reward = discounted_chunk_return(
+            batch["reward_seq"],
+            gamma,
+            batch["actual_steps"],
+        )
+        bootstrap = (
+            gamma ** batch["actual_steps"].unsqueeze(-1).float()
+        ) * (1.0 - batch["done"].unsqueeze(-1)) * q_next
+        target = reward + bootstrap
+
+        disagreements.append(((q1_mu - q2_mu).abs() * 0.5).reshape(-1).cpu())
+        td_residuals.append(
+            (
+                (q1_exec - target).abs()
+                + (q2_exec - target).abs()
+            ).mul(0.5).reshape(-1).cpu()
+        )
+        sources.append(batch["source"].reshape(-1).cpu())
+
+    disagreement = torch.cat(disagreements)
+    td_residual = torch.cat(td_residuals)
+    source = torch.cat(sources).long()
+
+    def summarize(mask: Tensor) -> dict[str, float | int]:
+        x = disagreement[mask]
+        y = td_residual[mask]
+        return {
+            "count": int(x.numel()),
+            "td_abs_mean": float(y.mean()),
+            "pearson": _correlation(x, y),
+            "spearman": _correlation(_average_ranks(x), _average_ranks(y)),
+        }
+
+    result = {"overall": summarize(torch.ones_like(source, dtype=torch.bool)), "source": {}}
+    for source_id in range(4):
+        mask = source == source_id
+        if bool(mask.any()):
+            result["source"][str(source_id)] = summarize(mask)
+        else:
+            result["source"][str(source_id)] = {"count": 0}
+    return result
 
 
 @torch.no_grad()
@@ -279,6 +426,7 @@ def build_report(args: argparse.Namespace) -> dict:
     if args.kappa < 0:
         raise ValueError(f"kappa must be non-negative, got {args.kappa}")
     actor, critic, config = load_heads(args.policy_path, args.device)
+    target_critic = load_target_critic(args.policy_path, config, args.device)
     calibration_samples = _load_samples(
         args.calibration_cache_dir,
         args.calibration_split,
@@ -300,8 +448,16 @@ def build_report(args: argparse.Namespace) -> dict:
         args.beta,
         args.kappa,
     )
-    tau_low = calibration["disagreement"]["p50"]
-    tau_high = calibration["disagreement"]["p95"]
+    calibration_tau_low = calibration["disagreement"]["p50"]
+    calibration_tau_high = calibration["disagreement"]["p95"]
+    checkpoint_thresholds = load_checkpoint_thresholds(args.policy_path)
+    threshold_mode = config.get("actor_bc_uncertainty_threshold_mode", "fixed")
+    if threshold_mode == "ema_quantile" and checkpoint_thresholds is not None:
+        tau_low, tau_high = checkpoint_thresholds
+    else:
+        tau_low, tau_high = calibration_tau_low, calibration_tau_high
+    min_gap = float(config.get("actor_bc_uncertainty_min_gap", 1e-6))
+    tau_high = max(tau_high, tau_low + min_gap)
     training = score_samples(
         actor,
         critic,
@@ -330,6 +486,16 @@ def build_report(args: argparse.Namespace) -> dict:
         tau_low,
         tau_high,
     )
+    correlations = td_correlation(
+        actor,
+        critic,
+        target_critic,
+        calibration_samples,
+        args.batch_size,
+        args.device,
+        gamma=float(config.get("gamma", 0.99)),
+        target_q_clip=config.get("target_q_clip", 100.0),
+    )
     return {
         "policy_path": str(Path(args.policy_path).resolve()),
         "calibration_cache": str(Path(args.calibration_cache_dir).resolve()),
@@ -337,11 +503,24 @@ def build_report(args: argparse.Namespace) -> dict:
         "ac_semantics_version": config.get("ac_semantics_version"),
         "base_beta": args.beta,
         "kappa": args.kappa,
+        "threshold_mode": threshold_mode,
         "tau_low": tau_low,
         "tau_high": tau_high,
+        "calibration_tau_low": calibration_tau_low,
+        "calibration_tau_high": calibration_tau_high,
+        "checkpoint_tau_low": (
+            checkpoint_thresholds[0] if checkpoint_thresholds is not None else None
+        ),
+        "checkpoint_tau_high": (
+            checkpoint_thresholds[1] if checkpoint_thresholds is not None else None
+        ),
+        "critic_bootstrap_mode": config.get("critic_bootstrap_mode", "none"),
+        "critic_bootstrap_keep_prob": config.get("critic_bootstrap_keep_prob", 0.8),
+        "critic_bootstrap_seed": config.get("critic_bootstrap_seed", 1000),
         "calibration": calibration,
         "training": training,
         "gradients": gradients,
+        "td_correlation": correlations,
         "checks": {
             "all_finite": all(
                 math.isfinite(value)
@@ -352,6 +531,8 @@ def build_report(args: argparse.Namespace) -> dict:
                     training["beta"]["max"],
                     gradients["q_grad_norm_mean"],
                     gradients["bc_weighted_grad_norm_mean"],
+                    correlations["overall"]["pearson"],
+                    correlations["overall"]["spearman"],
                 )
             ),
             "beta_within_expected_range": (

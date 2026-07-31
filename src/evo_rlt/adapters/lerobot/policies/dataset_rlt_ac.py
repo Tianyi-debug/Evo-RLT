@@ -49,9 +49,9 @@ class ChunkTransitionDataset(Dataset):
       actual_steps   ()
       (optional) source, episode_id, is_critical
 
-    The samples are returned exactly as stored (dicts of tensors); the
-    flattening for `exec_chunk_flat` / `ref_chunk_flat` / `next_ref_flat` is
-    deferred to ChunkACPolicy.forward.
+    The stored fields are returned unchanged and a stable `cache_index` is
+    injected from the sample position. Flattening for `exec_chunk_flat` /
+    `ref_chunk_flat` / `next_ref_flat` is deferred to ChunkACPolicy.forward.
     """
 
     def __init__(self, cache_dir: str | pathlib.Path, split: str = "train"):
@@ -90,4 +90,6 @@ class ChunkTransitionDataset(Dataset):
         return self.num_frames
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        return self._transitions[idx]
+        sample = dict(self._transitions[idx])
+        sample["cache_index"] = torch.tensor(idx, dtype=torch.long)
+        return sample

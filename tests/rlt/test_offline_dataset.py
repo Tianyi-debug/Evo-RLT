@@ -5,6 +5,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from evo_rlt.adapters.lerobot.demo_loader import rlt_demo_collate
+from evo_rlt.adapters.lerobot.policies.dataset_rlt_ac import ChunkTransitionDataset
 from evo_rlt.core.interfaces import ChunkTransition
 from evo_rlt.adapters.lerobot.offline_dataset import (
     build_overlap_frame_indices,
@@ -73,6 +74,19 @@ def test_save_load_transition_cache(tmp_path):
             for j in range(15)
         )
         assert found, f"Loaded state {i} not found in originals"
+
+
+def test_chunk_transition_dataset_injects_stable_cache_index_without_mutation(tmp_path):
+    transitions = [vars(transition) for transition in _make_transitions(3)]
+    torch.save(transitions, tmp_path / "chunk_transitions_train.pt")
+    dataset = ChunkTransitionDataset(tmp_path)
+
+    first = dataset[1]
+    second = dataset[1]
+
+    assert first["cache_index"].item() == 1
+    assert second["cache_index"].item() == 1
+    assert "cache_index" not in dataset._transitions[1]
 
 
 def test_save_transition_cache_replaces_atomically(monkeypatch, tmp_path):

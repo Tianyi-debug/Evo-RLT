@@ -20,6 +20,11 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.actor_ref_dropout_p == 0.0
     assert config.actor_bc_weight_mode == "fixed"
     assert config.actor_bc_uncertainty_kappa == 0.0
+    assert config.actor_bc_uncertainty_threshold_mode == "fixed"
+    assert config.actor_bc_uncertainty_ema_decay == pytest.approx(0.95)
+    assert config.critic_bootstrap_mode == "none"
+    assert config.critic_bootstrap_keep_prob == pytest.approx(0.8)
+    assert config.diagnostics_jsonl_path is None
 
 
 def test_unversioned_local_checkpoint_is_pinned_to_v1(tmp_path):
@@ -77,6 +82,21 @@ def test_dynamic_bc_config_validates_schedule():
     with pytest.raises(ValueError, match="non-negative"):
         ChunkACPolicyConfig(actor_bc_uncertainty_kappa=-1.0)
 
+    with pytest.raises(ValueError, match="threshold_mode"):
+        ChunkACPolicyConfig(actor_bc_uncertainty_threshold_mode="rolling")
+
+    with pytest.raises(ValueError, match="ema_decay"):
+        ChunkACPolicyConfig(actor_bc_uncertainty_ema_decay=1.0)
+
+    with pytest.raises(ValueError, match="bootstrap_mode"):
+        ChunkACPolicyConfig(critic_bootstrap_mode="random_each_epoch")
+
+    with pytest.raises(ValueError, match="keep_prob"):
+        ChunkACPolicyConfig(critic_bootstrap_keep_prob=0.0)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        ChunkACPolicyConfig(critic_bootstrap_seed=-1)
+
 
 def test_dynamic_bc_config_round_trips_through_pretrained_config(tmp_path):
     config = ChunkACPolicyConfig(
@@ -84,6 +104,12 @@ def test_dynamic_bc_config_round_trips_through_pretrained_config(tmp_path):
         actor_bc_uncertainty_tau_low=0.015,
         actor_bc_uncertainty_tau_high=0.019,
         actor_bc_uncertainty_kappa=3.0,
+        actor_bc_uncertainty_threshold_mode="ema_quantile",
+        actor_bc_uncertainty_ema_decay=0.9,
+        critic_bootstrap_mode="fixed_bernoulli",
+        critic_bootstrap_keep_prob=0.75,
+        critic_bootstrap_seed=77,
+        diagnostics_jsonl_path="/tmp/evo-rlt-diagnostics.jsonl",
     )
     config.save_pretrained(tmp_path)
 
@@ -94,3 +120,9 @@ def test_dynamic_bc_config_round_trips_through_pretrained_config(tmp_path):
     assert loaded.actor_bc_uncertainty_tau_low == pytest.approx(0.015)
     assert loaded.actor_bc_uncertainty_tau_high == pytest.approx(0.019)
     assert loaded.actor_bc_uncertainty_kappa == pytest.approx(3.0)
+    assert loaded.actor_bc_uncertainty_threshold_mode == "ema_quantile"
+    assert loaded.actor_bc_uncertainty_ema_decay == pytest.approx(0.9)
+    assert loaded.critic_bootstrap_mode == "fixed_bernoulli"
+    assert loaded.critic_bootstrap_keep_prob == pytest.approx(0.75)
+    assert loaded.critic_bootstrap_seed == 77
+    assert loaded.diagnostics_jsonl_path == "/tmp/evo-rlt-diagnostics.jsonl"

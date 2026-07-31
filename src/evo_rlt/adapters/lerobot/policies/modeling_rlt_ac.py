@@ -156,6 +156,17 @@ class ChunkACPolicy(PreTrainedPolicy):
 
         # Persistent step counter — survives ckpt save/load.
         self.register_buffer("_critic_step", torch.zeros((), dtype=torch.long), persistent=True)
+        self.register_buffer(
+            "_actor_bc_tau_low_ema",
+            torch.tensor(float(config.actor_bc_uncertainty_tau_low)),
+            persistent=True,
+        )
+        self.register_buffer(
+            "_actor_bc_tau_high_ema",
+            torch.tensor(float(config.actor_bc_uncertainty_tau_high)),
+            persistent=True,
+        )
+        self._diagnostics_jsonl_initialized = False
 
         # Deploy-only: lazy build at .reset() time.
         self.modifier: RLTActionModifier | None = None
@@ -266,11 +277,12 @@ class ChunkACPolicy(PreTrainedPolicy):
         out["exec_chunk_flat"] = out["exec_chunk"].flatten(start_dim=-2)
         out["ref_chunk_flat"] = out["ref_chunk"].flatten(start_dim=-2)
         out["next_ref_flat"] = out["next_ref_chunk"].flatten(start_dim=-2)
-        if "source" in batch:
-            source = batch["source"]
-            if not isinstance(source, Tensor):
-                source = torch.as_tensor(source)
-            out["source"] = source
+        for key in ("source", "cache_index"):
+            if key in batch:
+                value = batch[key]
+                if not isinstance(value, Tensor):
+                    value = torch.as_tensor(value)
+                out[key] = value
         return out
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict | None]:
@@ -284,31 +296,143 @@ class ChunkACPolicy(PreTrainedPolicy):
             gamma=self.config.gamma,
             C=self.config.chunk_length,
             target_q_clip=self.config.target_q_clip,
+            bootstrap_mode=getattr(self.config, "critic_bootstrap_mode", "none"),
+            bootstrap_keep_prob=getattr(
+                self.config,
+                "critic_bootstrap_keep_prob",
+                0.8,
+            ),
+            bootstrap_seed=getattr(self.config, "critic_bootstrap_seed", 1000),
         )
         soft_update(self.target_critic, self.critic, self.config.tau)
         self._critic_step += 1
 
+        source_info = self._source_fraction_diagnostics(tx)
         do_actor = (int(self._critic_step.item()) % self.config.actor_update_interval) == 0
         if do_actor:
             a_loss, actor_info = self._actor_loss_without_critic_grads(tx)
             total = c_loss + a_loss
-            info = {
-                "loss": total.detach(),
+            raw_info = {
+                "loss_total_step": total.detach(),
                 "loss_critic": c_loss.detach(),
                 "loss_actor": a_loss.detach(),
                 "critic_step": self._critic_step.detach().clone(),
+                "actor_update": True,
                 **critic_info,
+                **source_info,
                 **actor_info,
             }
+            info = self._finalize_diagnostics(raw_info)
             return total, info
 
-        info = {
-            "loss": c_loss.detach(),
+        raw_info = {
+            "loss_total_step": c_loss.detach(),
             "loss_critic": c_loss.detach(),
             "critic_step": self._critic_step.detach().clone(),
+            "actor_update": False,
             **critic_info,
+            **source_info,
         }
+        info = self._finalize_diagnostics(raw_info)
         return c_loss, info
+
+    @staticmethod
+    def _scalarize_diagnostics(info: dict[str, Any]) -> dict[str, float | int | bool]:
+        scalarized: dict[str, float | int | bool] = {}
+        for key, value in info.items():
+            if isinstance(value, Tensor):
+                if value.numel() != 1:
+                    raise ValueError(
+                        f"Diagnostic {key!r} must be scalar, got shape {tuple(value.shape)}"
+                    )
+                value = value.detach().cpu().item()
+            if isinstance(value, bool):
+                scalarized[key] = value
+            elif isinstance(value, int):
+                scalarized[key] = value
+            elif isinstance(value, float):
+                if not math.isfinite(value):
+                    raise ValueError(f"Diagnostic {key!r} is not finite: {value}")
+                scalarized[key] = value
+            else:
+                raise TypeError(
+                    f"Diagnostic {key!r} has unsupported type {type(value).__name__}"
+                )
+        return scalarized
+
+    @staticmethod
+    def _source_fraction_diagnostics(batch: dict[str, Tensor]) -> dict[str, Tensor]:
+        source = batch.get("source")
+        if source is None:
+            return {}
+        source = source.detach().reshape(-1)
+        return {
+            f"source_{source_id}_frac": (source == source_id).float().mean()
+            for source_id in range(4)
+        }
+
+    def _finalize_diagnostics(self, info: dict[str, Any]) -> dict[str, float | int | bool]:
+        scalarized = self._scalarize_diagnostics(info)
+        path_value = getattr(self.config, "diagnostics_jsonl_path", None)
+        if path_value:
+            path = Path(path_value).expanduser()
+            if not getattr(self, "_diagnostics_jsonl_initialized", False):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._diagnostics_jsonl_initialized = True
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(scalarized, sort_keys=True) + "\n")
+        return scalarized
+
+    def _actor_uncertainty_thresholds(self) -> tuple[float, float]:
+        threshold_mode = getattr(
+            self.config,
+            "actor_bc_uncertainty_threshold_mode",
+            "fixed",
+        )
+        if threshold_mode == "ema_quantile":
+            low_buffer = getattr(self, "_actor_bc_tau_low_ema", None)
+            high_buffer = getattr(self, "_actor_bc_tau_high_ema", None)
+            if low_buffer is not None and high_buffer is not None:
+                low = float(low_buffer.item())
+                high = float(high_buffer.item())
+            else:
+                low = float(self.config.actor_bc_uncertainty_tau_low)
+                high = float(self.config.actor_bc_uncertainty_tau_high)
+        else:
+            low = float(getattr(self.config, "actor_bc_uncertainty_tau_low", 0.0))
+            high = float(getattr(self.config, "actor_bc_uncertainty_tau_high", 1.0))
+        min_gap = float(getattr(self.config, "actor_bc_uncertainty_min_gap", 1e-6))
+        return low, max(high, low + min_gap)
+
+    def _update_actor_uncertainty_thresholds(
+        self,
+        actor_info: dict[str, Tensor],
+    ) -> tuple[float, float]:
+        threshold_mode = getattr(
+            self.config,
+            "actor_bc_uncertainty_threshold_mode",
+            "fixed",
+        )
+        weight_mode = getattr(self.config, "actor_bc_weight_mode", "fixed")
+        if threshold_mode != "ema_quantile" or weight_mode != "disagreement":
+            return self._actor_uncertainty_thresholds()
+
+        low_buffer = getattr(self, "_actor_bc_tau_low_ema", None)
+        high_buffer = getattr(self, "_actor_bc_tau_high_ema", None)
+        if low_buffer is None or high_buffer is None:
+            raise RuntimeError("EMA uncertainty mode requires persistent tau buffers")
+
+        decay = float(getattr(self.config, "actor_bc_uncertainty_ema_decay", 0.95))
+        min_gap = float(getattr(self.config, "actor_bc_uncertainty_min_gap", 1e-6))
+        batch_low = actor_info["actor_disagreement_p50"].detach().to(low_buffer.device)
+        batch_high = actor_info["actor_disagreement_p95"].detach().to(high_buffer.device)
+        with torch.no_grad():
+            updated_low = decay * low_buffer + (1.0 - decay) * batch_low
+            updated_high = decay * high_buffer + (1.0 - decay) * batch_high
+            updated_high = torch.maximum(updated_high, updated_low + min_gap)
+            low_buffer.copy_(updated_low)
+            high_buffer.copy_(updated_high)
+        return float(low_buffer.item()), float(high_buffer.item())
 
     def _actor_loss_without_critic_grads(
         self,
@@ -318,28 +442,31 @@ class ChunkACPolicy(PreTrainedPolicy):
         for p in critic_params:
             p.requires_grad_(False)
         try:
-            return actor_loss_with_diagnostics(
+            tau_low, tau_high = self._actor_uncertainty_thresholds()
+            loss, info = actor_loss_with_diagnostics(
                 self.actor,
                 self.critic,
                 tx,
                 beta=self.config.beta,
                 weight_mode=getattr(self.config, "actor_bc_weight_mode", "fixed"),
-                uncertainty_tau_low=getattr(
-                    self.config,
-                    "actor_bc_uncertainty_tau_low",
-                    0.0,
-                ),
-                uncertainty_tau_high=getattr(
-                    self.config,
-                    "actor_bc_uncertainty_tau_high",
-                    1.0,
-                ),
+                uncertainty_tau_low=tau_low,
+                uncertainty_tau_high=tau_high,
                 uncertainty_kappa=getattr(
                     self.config,
                     "actor_bc_uncertainty_kappa",
                     0.0,
                 ),
             )
+            updated_low, updated_high = self._update_actor_uncertainty_thresholds(info)
+            info.update(
+                {
+                    "actor_tau_low_used": torch.tensor(tau_low),
+                    "actor_tau_high_used": torch.tensor(tau_high),
+                    "actor_tau_low_updated": torch.tensor(updated_low),
+                    "actor_tau_high_updated": torch.tensor(updated_high),
+                }
+            )
+            return loss, info
         finally:
             for p in critic_params:
                 p.requires_grad_(True)
