@@ -91,7 +91,7 @@ class ChunkACPolicy(PreTrainedPolicy):
                 **kwargs,
             )
         config.pretrained_path = str(pretrained_name_or_path)
-        return super().from_pretrained(
+        policy = super().from_pretrained(
             pretrained_name_or_path,
             config=config,
             force_download=force_download,
@@ -104,6 +104,8 @@ class ChunkACPolicy(PreTrainedPolicy):
             strict=strict,
             **kwargs,
         )
+        policy._reset_actor_uncertainty_ema_from_config()
+        return policy
 
     def __init__(
         self,
@@ -403,6 +405,35 @@ class ChunkACPolicy(PreTrainedPolicy):
             high = float(getattr(self.config, "actor_bc_uncertainty_tau_high", 1.0))
         min_gap = float(getattr(self.config, "actor_bc_uncertainty_min_gap", 1e-6))
         return low, max(high, low + min_gap)
+
+    def _reset_actor_uncertainty_ema_from_config(self) -> bool:
+        if not getattr(
+            self.config,
+            "actor_bc_uncertainty_reset_ema_on_load",
+            False,
+        ):
+            return False
+
+        low = float(self.config.actor_bc_uncertainty_tau_low)
+        high = float(self.config.actor_bc_uncertainty_tau_high)
+        old_low = float(self._actor_bc_tau_low_ema.item())
+        old_high = float(self._actor_bc_tau_high_ema.item())
+        with torch.no_grad():
+            self._actor_bc_tau_low_ema.fill_(low)
+            self._actor_bc_tau_high_ema.fill_(high)
+
+        # This is a one-shot load override. Saved checkpoints must resume from
+        # their learned EMA buffers instead of resetting on every load.
+        self.config.actor_bc_uncertainty_reset_ema_on_load = False
+        log.info(
+            "Reset actor disagreement EMA thresholds after checkpoint load: "
+            "[%g, %g] -> [%g, %g]",
+            old_low,
+            old_high,
+            low,
+            high,
+        )
+        return True
 
     def _update_actor_uncertainty_thresholds(
         self,

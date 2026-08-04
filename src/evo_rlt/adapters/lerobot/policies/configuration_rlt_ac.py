@@ -69,6 +69,7 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     actor_bc_uncertainty_threshold_mode: str = "fixed"
     actor_bc_uncertainty_ema_decay: float = 0.95
     actor_bc_uncertainty_min_gap: float = 1e-6
+    actor_bc_uncertainty_reset_ema_on_load: bool = False
     critic_bootstrap_mode: str = "none"
     critic_bootstrap_keep_prob: float = 0.8
     critic_bootstrap_seed: int = 1000
@@ -160,6 +161,15 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 "actor_bc_uncertainty_min_gap must be positive, "
                 f"got {self.actor_bc_uncertainty_min_gap}"
+            )
+        if self.actor_bc_uncertainty_reset_ema_on_load and (
+            self.actor_bc_weight_mode != "disagreement"
+            or self.actor_bc_uncertainty_threshold_mode != "ema_quantile"
+        ):
+            raise ValueError(
+                "actor_bc_uncertainty_reset_ema_on_load requires "
+                "actor_bc_weight_mode='disagreement' and "
+                "actor_bc_uncertainty_threshold_mode='ema_quantile'"
             )
         if self.critic_bootstrap_mode not in ("none", "fixed_bernoulli"):
             raise ValueError(

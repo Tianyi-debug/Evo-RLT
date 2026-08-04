@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from lerobot.policies.pretrained import PreTrainedPolicy
 
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_ac import ChunkACPolicy
 from evo_rlt.core.actor import ChunkActor
@@ -35,6 +36,7 @@ def _head_only_policy(
         actor_bc_uncertainty_threshold_mode="ema_quantile" if ema else "fixed",
         actor_bc_uncertainty_ema_decay=0.5,
         actor_bc_uncertainty_min_gap=1e-6,
+        actor_bc_uncertainty_reset_ema_on_load=False,
         critic_bootstrap_mode="fixed_bernoulli" if bootstrap else "none",
         critic_bootstrap_keep_prob=0.8,
         critic_bootstrap_seed=1000,
@@ -145,6 +147,82 @@ def test_ema_threshold_buffers_round_trip_with_state_dict():
 
     assert restored._actor_bc_tau_low_ema.item() == pytest.approx(0.123)
     assert restored._actor_bc_tau_high_ema.item() == pytest.approx(0.456)
+
+
+def test_ema_thresholds_can_be_reset_once_after_checkpoint_load(caplog):
+    policy = _head_only_policy(ema=True)
+    policy._actor_bc_tau_low_ema.fill_(0.0)
+    policy._actor_bc_tau_high_ema.fill_(1.0)
+    policy.config.actor_bc_uncertainty_tau_low = 0.0025
+    policy.config.actor_bc_uncertainty_tau_high = 0.005
+    policy.config.actor_bc_uncertainty_reset_ema_on_load = True
+
+    with caplog.at_level("INFO"):
+        applied = policy._reset_actor_uncertainty_ema_from_config()
+
+    assert applied is True
+    assert policy._actor_bc_tau_low_ema.item() == pytest.approx(0.0025)
+    assert policy._actor_bc_tau_high_ema.item() == pytest.approx(0.005)
+    assert policy.config.actor_bc_uncertainty_reset_ema_on_load is False
+    assert "[0, 1] -> [0.0025, 0.005]" in caplog.text
+
+    policy._actor_bc_tau_low_ema.fill_(0.003)
+    policy._actor_bc_tau_high_ema.fill_(0.006)
+    assert policy._reset_actor_uncertainty_ema_from_config() is False
+    assert policy._actor_bc_tau_low_ema.item() == pytest.approx(0.003)
+    assert policy._actor_bc_tau_high_ema.item() == pytest.approx(0.006)
+
+
+def test_from_pretrained_applies_ema_reset_after_parent_load(monkeypatch):
+    policy = _head_only_policy(ema=True)
+    policy._actor_bc_tau_low_ema.fill_(0.0)
+    policy._actor_bc_tau_high_ema.fill_(1.0)
+    policy.config.actor_bc_uncertainty_tau_low = 0.0025
+    policy.config.actor_bc_uncertainty_tau_high = 0.005
+    policy.config.actor_bc_uncertainty_reset_ema_on_load = True
+
+    def fake_parent_load(cls, pretrained_name_or_path, *, config, **kwargs):
+        assert cls is ChunkACPolicy
+        assert pretrained_name_or_path == "/tmp/fixed-checkpoint"
+        assert policy._actor_bc_tau_low_ema.item() == pytest.approx(0.0)
+        assert policy._actor_bc_tau_high_ema.item() == pytest.approx(1.0)
+        return policy
+
+    monkeypatch.setattr(
+        PreTrainedPolicy,
+        "from_pretrained",
+        classmethod(fake_parent_load),
+    )
+
+    loaded = ChunkACPolicy.from_pretrained(
+        "/tmp/fixed-checkpoint",
+        config=policy.config,
+    )
+
+    assert loaded is policy
+    assert loaded._actor_bc_tau_low_ema.item() == pytest.approx(0.0025)
+    assert loaded._actor_bc_tau_high_ema.item() == pytest.approx(0.005)
+    assert loaded.config.actor_bc_uncertainty_reset_ema_on_load is False
+
+
+def test_ema_reset_state_dict_round_trip_preserves_learned_thresholds():
+    policy = _head_only_policy(ema=True)
+    policy.config.actor_bc_uncertainty_tau_low = 0.0025
+    policy.config.actor_bc_uncertainty_tau_high = 0.005
+    policy.config.actor_bc_uncertainty_reset_ema_on_load = True
+    policy._actor_bc_tau_low_ema.fill_(0.0)
+    policy._actor_bc_tau_high_ema.fill_(1.0)
+    policy._reset_actor_uncertainty_ema_from_config()
+    policy._actor_bc_tau_low_ema.fill_(0.003)
+    policy._actor_bc_tau_high_ema.fill_(0.006)
+    state = copy.deepcopy(policy.state_dict())
+
+    restored = _head_only_policy(ema=True)
+    restored.load_state_dict(state)
+    restored.config.actor_bc_uncertainty_reset_ema_on_load = False
+    assert restored._reset_actor_uncertainty_ema_from_config() is False
+    assert restored._actor_bc_tau_low_ema.item() == pytest.approx(0.003)
+    assert restored._actor_bc_tau_high_ema.item() == pytest.approx(0.006)
 
 
 def test_jsonl_records_every_critic_step_and_actor_frequency(tmp_path):
