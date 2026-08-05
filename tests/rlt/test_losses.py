@@ -349,6 +349,38 @@ def test_human_bc_target_is_separate_from_actor_proposal_and_reports_bound():
     assert diagnostics["human_bc_target_rmse"].item() == pytest.approx(0.5)
 
 
+def test_human_target_reachability_uses_per_action_dim_bound():
+    class StubResidualActor:
+        action_residual = True
+        delta_scale = 0.1
+
+        def forward(self, state_vec, proposal_chunk, training=False):
+            return proposal_chunk, torch.zeros_like(proposal_chunk)
+
+        def residual_delta_bound(self, like):
+            return torch.tensor([0.25, 0.70], dtype=like.dtype).repeat(2).unsqueeze(0)
+
+    class StubCritic:
+        def min_q(self, state_vec, action):
+            return torch.zeros(state_vec.shape[0], 1)
+
+    _, diagnostics = actor_loss_with_diagnostics(
+        StubResidualActor(),
+        StubCritic(),
+        {
+            "state_vec": torch.zeros(1, 3),
+            "proposal_chunk_flat": torch.zeros(1, 4),
+            "bc_target_chunk_flat": torch.tensor([[0.2, 0.6, 0.2, 0.6]]),
+            "source": torch.tensor([3]),
+        },
+        beta=1.0,
+    )
+
+    assert diagnostics["human_target_outside_residual_bound_frac"].item() == 0.0
+    assert diagnostics["actor_delta_scale_min"].item() == pytest.approx(0.25)
+    assert diagnostics["actor_delta_scale_max"].item() == pytest.approx(0.70)
+
+
 def test_target_is_stop_gradiented(actor, critic, target_critic, batch):
     """Target critic params should not receive gradients through critic_loss."""
     loss = critic_loss(critic, target_critic, actor, batch, gamma=0.99, C=C)

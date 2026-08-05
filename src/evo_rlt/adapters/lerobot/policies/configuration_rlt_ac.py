@@ -50,6 +50,7 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     state_normalization: str = "rl_token_layer_norm"
     actor_action_residual: bool = True
     actor_delta_scale: float = 0.1
+    actor_delta_scale_per_action_dim: list[float] | None = None
     ac_semantics_version: int = 2
 
     # --- Critic + target ---
@@ -133,6 +134,17 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 f"actor_delta_scale must be positive, got {self.actor_delta_scale}"
             )
+        if self.actor_delta_scale_per_action_dim is not None:
+            if len(self.actor_delta_scale_per_action_dim) != self.action_dim:
+                raise ValueError(
+                    "actor_delta_scale_per_action_dim must have one value per action "
+                    f"dimension ({self.action_dim}), got "
+                    f"{len(self.actor_delta_scale_per_action_dim)}"
+                )
+            if any(scale <= 0 for scale in self.actor_delta_scale_per_action_dim):
+                raise ValueError(
+                    "all actor_delta_scale_per_action_dim values must be positive"
+                )
         if self.ac_semantics_version not in (1, 2):
             raise ValueError(
                 f"ac_semantics_version must be 1 or 2, got {self.ac_semantics_version}"

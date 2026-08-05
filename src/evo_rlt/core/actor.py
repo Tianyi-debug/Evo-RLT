@@ -96,10 +96,21 @@ class ChunkActor(nn.Module):
         state_normalization: str = "none",
         action_residual: bool = False,
         delta_scale: float = 0.1,
+        delta_scale_per_action_dim: list[float] | tuple[float, ...] | None = None,
     ):
         super().__init__()
         if delta_scale <= 0:
             raise ValueError(f"delta_scale must be positive, got {delta_scale}")
+        if delta_scale_per_action_dim is not None:
+            if not delta_scale_per_action_dim:
+                raise ValueError("delta_scale_per_action_dim must not be empty")
+            if any(scale <= 0 for scale in delta_scale_per_action_dim):
+                raise ValueError("all delta_scale_per_action_dim values must be positive")
+            if chunk_dim % len(delta_scale_per_action_dim) != 0:
+                raise ValueError(
+                    f"chunk_dim={chunk_dim} must be divisible by the number of per-action "
+                    f"delta scales={len(delta_scale_per_action_dim)}"
+                )
         if residual:
             self.net = ResidualMLP(
                 state_dim + chunk_dim, hidden_dim, chunk_dim, num_layers,
@@ -123,6 +134,28 @@ class ChunkActor(nn.Module):
         self.state_normalization = state_normalization
         self.action_residual = action_residual
         self.delta_scale = delta_scale
+        self.delta_scale_per_action_dim = (
+            tuple(float(scale) for scale in delta_scale_per_action_dim)
+            if delta_scale_per_action_dim is not None
+            else None
+        )
+
+    def residual_delta_bound(self, like: torch.Tensor) -> torch.Tensor:
+        """Return scalar or chunk-expanded residual bounds on ``like``'s device."""
+        if self.delta_scale_per_action_dim is None:
+            return torch.as_tensor(self.delta_scale, dtype=like.dtype, device=like.device)
+        per_action = torch.as_tensor(
+            self.delta_scale_per_action_dim,
+            dtype=like.dtype,
+            device=like.device,
+        )
+        repeats = like.shape[-1] // per_action.numel()
+        if repeats * per_action.numel() != like.shape[-1]:
+            raise ValueError(
+                f"action chunk width={like.shape[-1]} is incompatible with "
+                f"{per_action.numel()} per-action residual bounds"
+            )
+        return per_action.repeat(repeats).unsqueeze(0)
 
     def forward(
         self,
@@ -153,7 +186,7 @@ class ChunkActor(nn.Module):
         x = torch.cat([state_vec, condition_ref], dim=-1)
         network_out = self.net(x)
         if self.action_residual:
-            delta = self.delta_scale * torch.tanh(network_out)
+            delta = self.residual_delta_bound(network_out) * torch.tanh(network_out)
             mu = (base_ref + delta).clamp(-1.0, 1.0)
         else:
             mu = network_out

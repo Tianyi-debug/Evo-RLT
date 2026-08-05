@@ -111,6 +111,33 @@ class TestActor:
         assert torch.all(mu >= -0.1)
         assert torch.allclose(mu, torch.full_like(mu, 0.1), atol=1e-6)
 
+    def test_per_action_dim_delta_scale_repeats_across_chunk(self):
+        actor = ChunkActor(
+            state_dim=8,
+            chunk_dim=6,
+            hidden_dim=16,
+            num_layers=2,
+            action_residual=True,
+            delta_scale=0.1,
+            delta_scale_per_action_dim=[0.1, 0.2, 0.7],
+        )
+        with torch.no_grad():
+            actor.net[-1].bias.fill_(100.0)
+
+        mu, _ = actor(torch.zeros(2, 8), torch.zeros(2, 6))
+
+        expected = torch.tensor([0.1, 0.2, 0.7, 0.1, 0.2, 0.7]).repeat(2, 1)
+        assert torch.allclose(mu, expected, atol=1e-6)
+
+    def test_per_action_dim_delta_scale_validates_chunk_width(self):
+        with pytest.raises(ValueError, match="must be divisible"):
+            ChunkActor(
+                state_dim=8,
+                chunk_dim=5,
+                action_residual=True,
+                delta_scale_per_action_dim=[0.1, 0.2],
+            )
+
     def test_rl_token_layer_norm_preserves_proprio_and_controls_scale(self):
         z_rl = torch.randn(16, 2048) * 1300.0 + 100.0
         proprio = torch.randn(16, 6)

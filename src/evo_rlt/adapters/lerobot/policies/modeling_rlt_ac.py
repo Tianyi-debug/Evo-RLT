@@ -139,6 +139,7 @@ class ChunkACPolicy(PreTrainedPolicy):
             state_normalization=config.state_normalization,
             action_residual=config.actor_action_residual,
             delta_scale=config.actor_delta_scale,
+            delta_scale_per_action_dim=config.actor_delta_scale_per_action_dim,
         )
         self.critic = TwinCritic(
             state_dim=state_dim,

@@ -321,8 +321,18 @@ def actor_loss_with_diagnostics(
         human_delta = executable_target[human_mask] - executable_proposal[human_mask]
         diagnostics["human_vla_action_rmse"] = human_delta.square().mean().sqrt()
         if getattr(actor, "action_residual", False):
-            outside = human_delta.abs().amax(dim=-1) > float(actor.delta_scale) + 1e-6
+            if hasattr(actor, "residual_delta_bound"):
+                residual_bound = actor.residual_delta_bound(human_delta)
+            else:
+                residual_bound = torch.as_tensor(
+                    float(actor.delta_scale),
+                    device=human_delta.device,
+                    dtype=human_delta.dtype,
+                )
+            outside = (human_delta.abs() > residual_bound + 1e-6).any(dim=-1)
             diagnostics["human_target_outside_residual_bound_frac"] = outside.float().mean()
+            diagnostics["actor_delta_scale_min"] = residual_bound.min()
+            diagnostics["actor_delta_scale_max"] = residual_bound.max()
         else:
             diagnostics["human_target_outside_residual_bound_frac"] = zero
         diagnostics["human_bc_target_rmse"] = (

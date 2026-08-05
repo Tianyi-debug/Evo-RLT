@@ -60,6 +60,7 @@ def _build_heads(config: dict) -> tuple[ChunkActor, TwinCritic]:
         state_normalization=config["state_normalization"],
         action_residual=bool(config["actor_action_residual"]),
         delta_scale=float(config["actor_delta_scale"]),
+        delta_scale_per_action_dim=config.get("actor_delta_scale_per_action_dim"),
     )
     critic = TwinCritic(
         state_dim=state_dim,
@@ -507,11 +508,14 @@ def build_report(args: argparse.Namespace) -> dict:
         tau_low=tau_low,
         tau_high=tau_high,
     )
-    actor_residual_bound = (
-        float(config["actor_delta_scale"])
-        if bool(config["actor_action_residual"])
-        else None
-    )
+    per_action_bounds = config.get("actor_delta_scale_per_action_dim")
+    actor_residual_bound = None
+    if bool(config["actor_action_residual"]):
+        actor_residual_bound = (
+            max(float(value) for value in per_action_bounds)
+            if per_action_bounds
+            else float(config["actor_delta_scale"])
+        )
     gradients = gradient_audit(
         actor,
         critic,

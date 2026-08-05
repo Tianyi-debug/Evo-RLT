@@ -362,6 +362,7 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --policy.state_normalization=rl_token_layer_norm \
   --policy.actor_action_residual=true \
   --policy.actor_delta_scale=0.1 \
+  --policy.actor_delta_scale_per_action_dim='[0.25,0.15,0.15,0.30,0.15,0.70]' \
   --policy.actor_ref_dropout_p=0.0 \
   --policy.chunk_exec_steps=25 \
   --policy.phase_mode=always_rl \

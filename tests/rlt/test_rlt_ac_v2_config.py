@@ -17,6 +17,7 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.state_normalization == "rl_token_layer_norm"
     assert config.actor_action_residual is True
     assert config.actor_delta_scale == 0.1
+    assert config.actor_delta_scale_per_action_dim is None
     assert config.actor_ref_dropout_p == 0.0
     assert config.actor_bc_weight_mode == "fixed"
     assert config.actor_bc_uncertainty_kappa == 0.0
@@ -26,6 +27,20 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.critic_bootstrap_mode == "none"
     assert config.critic_bootstrap_keep_prob == pytest.approx(0.8)
     assert config.diagnostics_jsonl_path is None
+
+
+def test_per_action_dim_delta_scale_validates_action_shape():
+    config = ChunkACPolicyConfig(
+        action_dim=6,
+        actor_delta_scale_per_action_dim=[0.25, 0.15, 0.15, 0.30, 0.15, 0.70],
+    )
+    assert config.actor_delta_scale_per_action_dim[-1] == pytest.approx(0.70)
+
+    with pytest.raises(ValueError, match="one value per action dimension"):
+        ChunkACPolicyConfig(
+            action_dim=6,
+            actor_delta_scale_per_action_dim=[0.1, 0.2],
+        )
 
 
 def test_unversioned_local_checkpoint_is_pinned_to_v1(tmp_path):
