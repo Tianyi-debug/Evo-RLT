@@ -25,6 +25,15 @@ def add_common_record_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--vcodec", default="h264")
     parser.add_argument("--no-teleop", action="store_true", default=False)
     parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
+    parser.add_argument(
+        "--deterministic",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Override the loaded actor policy at runtime. Use --deterministic for mean-action "
+            "evaluation and --no-deterministic for fixed-std Gaussian rollout exploration."
+        ),
+    )
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--dry-run", action="store_true", default=False)
 
@@ -71,6 +80,15 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rlt-toggle-key", default="r")
     parser.add_argument("--teleop-toggle-key", default="space")
     parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
+    parser.add_argument(
+        "--deterministic",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Override the loaded actor policy at runtime. Use --deterministic for mean-action "
+            "evaluation and --no-deterministic for fixed-std Gaussian rollout exploration."
+        ),
+    )
     parser.add_argument(
         "--start-with-teleop",
         action=argparse.BooleanOptionalAction,
@@ -159,6 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
     live.add_argument("--fps", type=float, default=30.0)
     live.add_argument("--setup-json", default=None)
     live.add_argument("--dry-run", action="store_true", default=False)
+    live.add_argument(
+        "--deterministic",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     add_rtc_args(live)
     live.set_defaults(func=run_live)
     return parser

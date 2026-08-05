@@ -8,6 +8,7 @@ import pytest
 
 from evo_rlt.adapters.lerobot.record.cli import build_parser
 from evo_rlt.adapters.lerobot.record.common import (
+    build_policy_overrides,
     build_teleop_argv,
     load_robot_setup,
     stage_follower_calibrations,
@@ -91,6 +92,50 @@ def test_full_local_display_forwards_to_record_backend():
     assert build_display_data_argv(args.display_data) == ["--display_data=true"]
     assert default_args.display_data is False
     assert build_display_data_argv(default_args.display_data) == []
+
+
+def test_full_gaussian_exploration_forwards_policy_override():
+    parser = build_parser()
+    args = parser.parse_args([
+        "full",
+        "--initial-source",
+        "vla",
+        "--policy-path",
+        "/tmp/ac",
+        "--no-deterministic",
+    ])
+
+    argv = build_policy_overrides(
+        policy_path=args.policy_path,
+        vla_path=args.vla_path,
+        rl_token_path=args.rl_token_path,
+        deterministic=args.deterministic,
+    )
+
+    assert args.deterministic is False
+    assert "--policy.deterministic=false" in argv
+
+
+def test_full_deterministic_evaluation_forwards_policy_override():
+    parser = build_parser()
+    args = parser.parse_args([
+        "full",
+        "--initial-source",
+        "vla",
+        "--policy-path",
+        "/tmp/ac",
+        "--deterministic",
+    ])
+
+    argv = build_policy_overrides(
+        policy_path=args.policy_path,
+        vla_path=args.vla_path,
+        rl_token_path=args.rl_token_path,
+        deterministic=args.deterministic,
+    )
+
+    assert args.deterministic is True
+    assert "--policy.deterministic=true" in argv
 
 
 def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():

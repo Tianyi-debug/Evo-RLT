@@ -855,6 +855,7 @@ def build_default_collect_record_argv(
             vla_path=args.vla_path,
             rl_token_path=args.rl_token_path,
             phase_mode="manual",
+            deterministic=getattr(args, "deterministic", None),
         ),
         *build_dataset_argv(
             dataset_name=paths.dataset_name,
@@ -1021,11 +1022,13 @@ def build_segment_policy_argv(args: argparse.Namespace) -> list[str]:
             rl_token_path=args.rl_token_path,
             phase_mode="always_vla",
             chunk_exec_steps=args.chunk_exec_steps,
+            deterministic=getattr(args, "deterministic", None),
         )
     return build_policy_overrides(
         policy_path=args.policy_path,
         vla_path=args.vla_path,
         rl_token_path=args.rl_token_path,
+        deterministic=getattr(args, "deterministic", None),
     )
 
 
@@ -1129,6 +1132,7 @@ def run_full(args: argparse.Namespace) -> None:
                 rl_token_path=args.rl_token_path,
                 phase_mode=args.phase_mode,
                 chunk_exec_steps=args.chunk_exec_steps,
+                deterministic=args.deterministic,
             ),
             *build_dataset_argv(
                 dataset_name=paths.dataset_name,
@@ -1194,6 +1198,7 @@ def run_live(args: argparse.Namespace) -> None:
                 rl_token_path=args.rl_token_path,
                 phase_mode=args.phase_mode,
                 chunk_exec_steps=args.chunk_exec_steps,
+                deterministic=args.deterministic,
             ),
             "--policy.device=cuda",
             "--device=cuda",

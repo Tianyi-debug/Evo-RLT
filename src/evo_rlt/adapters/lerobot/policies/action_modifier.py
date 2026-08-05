@@ -133,6 +133,7 @@ class RLTActionModifier(nn.Module):
         proprio_dim: int,
         chunk_exec_steps: int = 25,
         vla_ref: bool = True,
+        deterministic: bool = True,
     ):
         super().__init__()
         self.rl_token = rl_token
@@ -141,6 +142,7 @@ class RLTActionModifier(nn.Module):
         self.chunk_length = chunk_length
         self.chunk_exec_steps = chunk_exec_steps
         self.vla_ref = vla_ref
+        self.deterministic = deterministic
         self._cc_log_count = 0  # throttle for the compute_chunk ref diagnostic
         self.action_dim = action_dim
         self.proprio_dim = proprio_dim
@@ -201,19 +203,32 @@ class RLTActionModifier(nn.Module):
             # is exactly an all-zero ref. Reproduce that here.
             ref_flat = torch.zeros_like(ref_flat)
         should_log = self._cc_log_count < 3 or self._cc_log_count % 30 == 0
-        mu, _ = self.actor(state_vec, ref_flat, training=False)
-        chunk = unflatten_chunk(mu, self.chunk_length).clamp(-1, 1)
+        if self.deterministic:
+            action_flat, _ = self.actor(state_vec, ref_flat, training=False)
+            mu_flat = action_flat
+        else:
+            action_flat, mu_flat = self.actor.sample(
+                state_vec,
+                ref_flat,
+                training=False,
+            )
+        chunk = unflatten_chunk(action_flat, self.chunk_length).clamp(-1, 1)
+        mu_chunk = unflatten_chunk(mu_flat, self.chunk_length).clamp(-1, 1)
         if should_log:
             delta = (chunk - ref_chunk).abs()
+            exploration_delta = (chunk - mu_chunk).abs()
             # Diagnostic: the VLA ref is only the actor input; the returned
             # chunk below is the RLT actor output that will be executed.
             print(
-                f"[RLT source=RLT_ACTOR vla_ref={self.vla_ref}] "
+                f"[RLT source=RLT_ACTOR vla_ref={self.vla_ref} "
+                f"sample_mode={'mean' if self.deterministic else 'gaussian'}] "
                 f"compute_chunk #{self._cc_log_count}: "
                 f"vla_ref[0,0,:4]={[round(v, 4) for v in ref_chunk[0, 0, :4].tolist()]}, "
                 f"actor_out[0,0,:4]={[round(v, 4) for v in chunk[0, 0, :4].tolist()]}, "
                 f"mean_abs_delta={delta.mean().item():.4f}, "
                 f"max_abs_delta={delta.max().item():.4f}, "
+                f"mean_abs_exploration={exploration_delta.mean().item():.4f}, "
+                f"max_abs_exploration={exploration_delta.max().item():.4f}, "
                 f"ref-into-actor abs-sum={ref_flat.abs().sum().item():.4f}",
                 flush=True,
             )

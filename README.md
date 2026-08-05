@@ -439,6 +439,13 @@ evo-rlt-record collect "${COMMON_ARGS[@]}" --start-with-teleop --only-critical
 
 The same collection entrypoint is exposed as `evo-rlt-collect-default` after reinstalling package entry points, but checkpoint and setup paths still need to be supplied by the caller.
 
+For an `rlt_ac` policy, add `--deterministic` to execute the actor mean during
+evaluation, or `--no-deterministic` to sample the checkpoint's fixed-standard-
+deviation Gaussian actor during online rollout collection. Gaussian sampling is
+applied only in the RL phase; `always_vla` pass-through remains unchanged. The
+runtime log reports `sample_mode`, `mean_abs_exploration`, and
+`max_abs_exploration` for the generated chunk.
+
 Validated RTC defaults for this collection mode:
 
 ```text

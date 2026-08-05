@@ -299,6 +299,7 @@ def build_policy_overrides(
     rl_token_path: str | None,
     phase_mode: str | None = None,
     chunk_exec_steps: int | None = None,
+    deterministic: bool | None = None,
 ) -> list[str]:
     if policy_path is None:
         return []
@@ -307,6 +308,8 @@ def build_policy_overrides(
         overrides.append(f"--policy.phase_mode={phase_mode}")
     if chunk_exec_steps is not None:
         overrides.append(f"--policy.chunk_exec_steps={chunk_exec_steps}")
+    if deterministic is not None:
+        overrides.append(f"--policy.deterministic={'true' if deterministic else 'false'}")
     if vla_path is not None:
         overrides.append(f"--policy.vla_pretrained_path={vla_path}")
     if rl_token_path is not None:

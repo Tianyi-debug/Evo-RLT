@@ -519,6 +519,7 @@ class ChunkACPolicy(PreTrainedPolicy):
                 proprio_dim=self.config.proprio_dim,
                 chunk_exec_steps=self.config.chunk_exec_steps,
                 vla_ref=self.vla_ref,
+                deterministic=self.config.deterministic,
             )
             self._prefix_capture = PrefixOutputCapture(
                 token_pool_size=self.config.token_pool_size,

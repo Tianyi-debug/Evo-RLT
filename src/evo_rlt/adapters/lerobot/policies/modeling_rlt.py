@@ -135,6 +135,7 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
             chunk_exec_steps=config.chunk_exec_steps,
             action_dim=config.action_dim,
             proprio_dim=config.proprio_dim,
+            deterministic=config.deterministic,
         )
 
         # Prefix output capture (hook attached lazily when PI05 loads)
