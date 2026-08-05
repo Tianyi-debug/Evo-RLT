@@ -196,7 +196,7 @@ def test_transition_cache_v2_semantic_builder_zero_reward_on_failure():
     assert all(t.reward_seq.sum().item() == pytest.approx(0.0) for t in transitions)
 
 
-def test_transition_cache_v2_mixed_provenance_repairs_human_reference():
+def test_transition_cache_v2_separates_human_bc_target_from_vla_proposal():
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 
     chunk_length = 2
@@ -227,8 +227,11 @@ def test_transition_cache_v2_mixed_provenance_repairs_human_reference():
     assert torch.equal(transitions[0].ref_chunk, ref_chunks[0])
     assert transitions[1].source.item() == module.TRANSITION_SOURCE_HUMAN_OVERRIDE
     assert transitions[1].intervention.item() == 1.0
-    assert torch.equal(transitions[1].ref_chunk, exec_chunks[1])
-    assert torch.equal(transitions[0].next_ref_chunk, exec_chunks[2])
+    assert torch.equal(transitions[1].proposal_chunk, ref_chunks[1])
+    assert torch.equal(transitions[1].ref_chunk, ref_chunks[1])
+    assert torch.equal(transitions[1].bc_target_chunk, exec_chunks[1])
+    assert torch.equal(transitions[0].next_proposal_chunk, ref_chunks[2])
+    assert torch.equal(transitions[0].next_ref_chunk, ref_chunks[2])
 
 
 def test_transition_cache_v2_vla_mode_preserves_human_reference():
@@ -260,8 +263,33 @@ def test_transition_cache_v2_vla_mode_preserves_human_reference():
     assert transitions[1].source.item() == module.TRANSITION_SOURCE_HUMAN_OVERRIDE
     assert transitions[1].intervention.item() == 1.0
     assert torch.equal(transitions[1].exec_chunk, exec_chunks[1])
-    assert torch.equal(transitions[1].ref_chunk, ref_chunks[1])
+    assert torch.equal(transitions[1].proposal_chunk, ref_chunks[1])
+    assert torch.equal(transitions[1].bc_target_chunk, ref_chunks[1])
     assert torch.equal(transitions[0].next_ref_chunk, ref_chunks[2])
+
+
+def test_transition_cache_v2_summary_audits_residual_reachability():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+    transition = module.ChunkTransition(
+        state_vec=torch.zeros(2),
+        exec_chunk=torch.full((1, 2), 0.5),
+        ref_chunk=torch.zeros(1, 2),
+        reward_seq=torch.zeros(1),
+        next_state_vec=torch.zeros(2),
+        next_ref_chunk=torch.zeros(1, 2),
+        done=torch.tensor(0.0),
+        intervention=torch.tensor(1.0),
+        actual_steps=torch.tensor(1),
+        source=torch.tensor(module.TRANSITION_SOURCE_HUMAN_OVERRIDE),
+        proposal_chunk=torch.zeros(1, 2),
+        bc_target_chunk=torch.full((1, 2), 0.5),
+        next_proposal_chunk=torch.zeros(1, 2),
+    )
+
+    summary = module._transition_summary([transition], residual_delta_scale=0.1)
+
+    assert "human_vla_action_rmse=0.500000" in summary
+    assert "human_target_outside_residual_bound_frac=1.000000" in summary
 
 
 def test_transition_cache_v2_drop_legacy_handoff_and_invalid_bootstrap():
@@ -330,10 +358,8 @@ def test_transition_cache_v2_excludes_two_stage_hold_and_handoff_chunks():
         for transition in transitions
     )
     assert all(transition.intervention.item() == 1.0 for transition in transitions)
-    assert all(
-        torch.equal(transition.ref_chunk, transition.exec_chunk)
-        for transition in transitions
-    )
+    assert all(torch.equal(transition.proposal_chunk, transition.ref_chunk) for transition in transitions)
+    assert all(torch.equal(transition.bc_target_chunk, transition.exec_chunk) for transition in transitions)
 
 
 def test_transition_cache_v2_stratifies_source_and_outcome_groups():

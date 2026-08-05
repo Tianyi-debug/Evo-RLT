@@ -7,12 +7,16 @@ import torch
 
 from evo_rlt.core.interfaces import (
     ACTUAL_STEPS,
+    BC_TARGET_CHUNK_FLAT,
     DONE,
     EPISODE_ID,
     EXEC_CHUNK_FLAT,
     IS_CRITICAL,
+    INTERVENTION,
+    NEXT_PROPOSAL_FLAT,
     NEXT_REF_FLAT,
     NEXT_STATE_VEC,
+    PROPOSAL_CHUNK_FLAT,
     REF_CHUNK_FLAT,
     REWARD_SEQ,
     SOURCE,
@@ -51,18 +55,26 @@ class ReplayBuffer:
         indices = random.sample(range(len(self.buffer)), n)
         batch = [self.buffer[i] for i in indices]
         stacked_exec = torch.stack([t.exec_chunk for t in batch])
-        stacked_ref = torch.stack([t.ref_chunk for t in batch])
-        stacked_next_ref = torch.stack([t.next_ref_chunk for t in batch])
+        stacked_proposal = torch.stack([t.proposal_chunk for t in batch])
+        stacked_bc_target = torch.stack([t.bc_target_chunk for t in batch])
+        stacked_next_proposal = torch.stack([t.next_proposal_chunk for t in batch])
+        proposal_flat = stacked_proposal.flatten(start_dim=-2)
+        next_proposal_flat = stacked_next_proposal.flatten(start_dim=-2)
         return {
             STATE_VEC: torch.stack([t.state_vec for t in batch]),
             EXEC_CHUNK_FLAT: stacked_exec.flatten(start_dim=-2),
-            REF_CHUNK_FLAT: stacked_ref.flatten(start_dim=-2),
+            PROPOSAL_CHUNK_FLAT: proposal_flat,
+            BC_TARGET_CHUNK_FLAT: stacked_bc_target.flatten(start_dim=-2),
+            NEXT_PROPOSAL_FLAT: next_proposal_flat,
+            # Legacy aliases now consistently mean VLA proposal.
+            REF_CHUNK_FLAT: proposal_flat,
             REWARD_SEQ: torch.stack([t.reward_seq for t in batch]),
             NEXT_STATE_VEC: torch.stack([t.next_state_vec for t in batch]),
-            NEXT_REF_FLAT: stacked_next_ref.flatten(start_dim=-2),
+            NEXT_REF_FLAT: next_proposal_flat,
             DONE: torch.stack([t.done for t in batch]),
             ACTUAL_STEPS: torch.stack([t.actual_steps for t in batch]),
             SOURCE: torch.stack([t.source for t in batch]),
             EPISODE_ID: torch.stack([t.episode_id for t in batch]),
             IS_CRITICAL: torch.stack([t.is_critical for t in batch]),
+            INTERVENTION: torch.stack([t.intervention for t in batch]),
         }

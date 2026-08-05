@@ -190,12 +190,18 @@ def _renorm_one(t, src_stats, dst_stats, proprio_dim):
     t.exec_chunk = renorm_action(t.exec_chunk,
                                  src_stats["action_q01"], src_stats["action_q99"],
                                  dst_stats["action_q01"], dst_stats["action_q99"])
-    t.ref_chunk = renorm_action(t.ref_chunk,
-                                src_stats["action_q01"], src_stats["action_q99"],
-                                dst_stats["action_q01"], dst_stats["action_q99"])
-    t.next_ref_chunk = renorm_action(t.next_ref_chunk,
+    t.proposal_chunk = renorm_action(t.proposal_chunk,
                                      src_stats["action_q01"], src_stats["action_q99"],
                                      dst_stats["action_q01"], dst_stats["action_q99"])
+    t.bc_target_chunk = renorm_action(t.bc_target_chunk,
+                                      src_stats["action_q01"], src_stats["action_q99"],
+                                      dst_stats["action_q01"], dst_stats["action_q99"])
+    t.next_proposal_chunk = renorm_action(t.next_proposal_chunk,
+                                          src_stats["action_q01"], src_stats["action_q99"],
+                                          dst_stats["action_q01"], dst_stats["action_q99"])
+    # Keep deprecated cache aliases synchronized with the VLA proposal.
+    t.ref_chunk = t.proposal_chunk
+    t.next_ref_chunk = t.next_proposal_chunk
     t.state_vec = renorm_state_vec(t.state_vec, proprio_dim,
                                    src_stats["state_q01"], src_stats["state_q99"],
                                    dst_stats["state_q01"], dst_stats["state_q99"])

@@ -164,6 +164,9 @@ def _encoded_to_transitions(
             source=torch.tensor(source),
             episode_id=torch.tensor(episode_id),
             is_critical=torch.tensor(is_critical),
+            proposal_chunk=r,
+            bc_target_chunk=r,
+            next_proposal_chunk=nr,
         ))
     if episode_success and transitions and not any(t.done.item() == 1.0 for t in transitions):
         raise ValueError(
@@ -301,6 +304,9 @@ def save_transition_cache(
             "state_vec": t.state_vec, "exec_chunk": t.exec_chunk,
             "ref_chunk": t.ref_chunk, "reward_seq": t.reward_seq,
             "next_state_vec": t.next_state_vec, "next_ref_chunk": t.next_ref_chunk,
+            "proposal_chunk": t.proposal_chunk,
+            "bc_target_chunk": t.bc_target_chunk,
+            "next_proposal_chunk": t.next_proposal_chunk,
             "done": t.done, "intervention": t.intervention,
             "actual_steps": t.actual_steps,
             "source": t.source,

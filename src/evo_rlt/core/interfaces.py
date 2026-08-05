@@ -14,6 +14,12 @@ TRANSITION_SOURCE_HUMAN_OVERRIDE = 3
 # Batch dictionary key constants to avoid typos
 STATE_VEC = "state_vec"
 EXEC_CHUNK_FLAT = "exec_chunk_flat"
+# Proposal/target-separated semantics: actor is always conditioned on independently
+# generated VLA proposal, while the BC target may be the executed human action.
+PROPOSAL_CHUNK_FLAT = "proposal_chunk_flat"
+BC_TARGET_CHUNK_FLAT = "bc_target_chunk_flat"
+NEXT_PROPOSAL_FLAT = "next_proposal_flat"
+# Deprecated aliases kept for old caches, dashboards, and helper scripts.
 REF_CHUNK_FLAT = "ref_chunk_flat"
 REWARD_SEQ = "reward_seq"
 NEXT_STATE_VEC = "next_state_vec"
@@ -23,6 +29,7 @@ ACTUAL_STEPS = "actual_steps"
 SOURCE = "source"
 EPISODE_ID = "episode_id"
 IS_CRITICAL = "is_critical"
+INTERVENTION = "intervention"
 
 
 @dataclass
@@ -46,7 +53,14 @@ class VLAOutput:
 
 @dataclass
 class ChunkTransition:
-    """Single (unbatched) chunk-level transition for replay."""
+    """Single (unbatched) chunk-level transition for replay.
+
+    ``proposal_chunk`` is the VLA action used as actor input and residual base.
+    ``exec_chunk`` is the action actually executed and is used by the critic.
+    ``bc_target_chunk`` is normally the proposal, but becomes the executed
+    human action for intervention chunks. ``ref_chunk`` and ``next_ref_chunk``
+    are deprecated compatibility aliases for old caches.
+    """
 
     state_vec: torch.Tensor  # (state_dim,)
     exec_chunk: torch.Tensor  # (C, action_dim)
@@ -60,3 +74,17 @@ class ChunkTransition:
     source: torch.Tensor = field(default_factory=lambda: torch.tensor(0))
     episode_id: torch.Tensor = field(default_factory=lambda: torch.tensor(-1))
     is_critical: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
+    proposal_chunk: torch.Tensor | None = None
+    bc_target_chunk: torch.Tensor | None = None
+    next_proposal_chunk: torch.Tensor | None = None
+
+    def __post_init__(self) -> None:
+        # Old caches only contain ref_chunk. They remain loadable, but a human
+        # chunk whose ref was overwritten cannot recover its original proposal;
+        # those caches must be rebuilt for proposal/target-separated training.
+        if self.proposal_chunk is None:
+            self.proposal_chunk = self.ref_chunk
+        if self.bc_target_chunk is None:
+            self.bc_target_chunk = self.ref_chunk
+        if self.next_proposal_chunk is None:
+            self.next_proposal_chunk = self.next_ref_chunk

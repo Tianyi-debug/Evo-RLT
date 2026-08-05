@@ -169,6 +169,7 @@ class ChunkACPolicy(PreTrainedPolicy):
             persistent=True,
         )
         self._diagnostics_jsonl_initialized = False
+        self._legacy_transition_schema_warned = False
 
         # Deploy-only: lazy build at .reset() time.
         self.modifier: RLTActionModifier | None = None
@@ -255,18 +256,26 @@ class ChunkACPolicy(PreTrainedPolicy):
     def _coerce_batch(self, batch: dict[str, Any]) -> dict[str, Tensor]:
         """Convert ChunkTransition-style batch into the dict expected by losses.
 
-        Required keys: state_vec, exec_chunk, ref_chunk, reward_seq,
-        next_state_vec, next_ref_chunk, done, actual_steps.
-        Adds flattened views: exec_chunk_flat, ref_chunk_flat, next_ref_flat.
+        New caches separate ``proposal_chunk`` (actor input/residual base) from
+        ``bc_target_chunk`` (human action on HIL chunks). Legacy ref-only caches
+        remain loadable by treating ref as both proposal and target.
         """
         out: dict[str, Tensor] = {}
+        if (
+            ("proposal_chunk" not in batch or "bc_target_chunk" not in batch)
+            and not getattr(self, "_legacy_transition_schema_warned", False)
+        ):
+            log.warning(
+                "Training from a legacy ref-only transition cache: ref_chunk is "
+                "being used as both proposal and BC target. Rebuild the raw dataset "
+                "cache to learn VLA-to-human corrections."
+            )
+            self._legacy_transition_schema_warned = True
         for k in (
             "state_vec",
             "exec_chunk",
-            "ref_chunk",
             "reward_seq",
             "next_state_vec",
-            "next_ref_chunk",
             "done",
             "actual_steps",
         ):
@@ -276,10 +285,40 @@ class ChunkACPolicy(PreTrainedPolicy):
             if not isinstance(v, Tensor):
                 v = torch.as_tensor(v)
             out[k] = v
+
+        proposal = batch.get("proposal_chunk", batch.get("ref_chunk"))
+        if proposal is None:
+            raise KeyError(
+                "ChunkACPolicy.forward requires 'proposal_chunk' "
+                "(or legacy 'ref_chunk')"
+            )
+        bc_target = batch.get("bc_target_chunk", batch.get("ref_chunk", proposal))
+        next_proposal = batch.get(
+            "next_proposal_chunk",
+            batch.get("next_ref_chunk"),
+        )
+        if next_proposal is None:
+            raise KeyError(
+                "ChunkACPolicy.forward requires 'next_proposal_chunk' "
+                "(or legacy 'next_ref_chunk')"
+            )
+        for key, value in (
+            ("proposal_chunk", proposal),
+            ("bc_target_chunk", bc_target),
+            ("next_proposal_chunk", next_proposal),
+        ):
+            if not isinstance(value, Tensor):
+                value = torch.as_tensor(value)
+            out[key] = value
+
         out["exec_chunk_flat"] = out["exec_chunk"].flatten(start_dim=-2)
-        out["ref_chunk_flat"] = out["ref_chunk"].flatten(start_dim=-2)
-        out["next_ref_flat"] = out["next_ref_chunk"].flatten(start_dim=-2)
-        for key in ("source", "cache_index"):
+        out["proposal_chunk_flat"] = out["proposal_chunk"].flatten(start_dim=-2)
+        out["bc_target_chunk_flat"] = out["bc_target_chunk"].flatten(start_dim=-2)
+        out["next_proposal_flat"] = out["next_proposal_chunk"].flatten(start_dim=-2)
+        # Compatibility aliases now consistently point to VLA proposals.
+        out["ref_chunk_flat"] = out["proposal_chunk_flat"]
+        out["next_ref_flat"] = out["next_proposal_flat"]
+        for key in ("source", "intervention", "cache_index"):
             if key in batch:
                 value = batch[key]
                 if not isinstance(value, Tensor):

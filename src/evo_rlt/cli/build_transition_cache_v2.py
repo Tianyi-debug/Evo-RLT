@@ -1,7 +1,7 @@
 """Build chunk-transition cache for ChunkACPolicy training.
 
 Encodes each base frame in a LeRobotDataset through VLA + the trained RL
-Token encoder into a (state_vec, exec_chunk, ref_chunk, ...) tuple stored on
+Token encoder into a proposal/exec/BC-target-separated chunk transition stored on
 disk. The cache is consumed by ChunkTransitionDataset at AC training time.
 
 This v2 replaces the legacy custom-load builder. It loads the preprocessor
@@ -115,9 +115,9 @@ def parse_args() -> argparse.Namespace:
         choices=["executed", "vla"],
         default="executed",
         help=(
-            "Reference stored for human-override chunks. 'executed' preserves the "
-            "existing HIL behavior; 'vla' keeps the independently generated VLA "
-            "proposal for uncertainty-weighted VLA-BC."
+            "BC target stored for human-override chunks. 'executed' supervises "
+            "the actor with the human action while preserving the independently "
+            "generated VLA proposal as actor input; 'vla' uses VLA BC everywhere."
         ),
     )
     p.add_argument(
@@ -128,6 +128,15 @@ def parse_args() -> argparse.Namespace:
             "How to handle old datasets without intervention_stage. 'majority' "
             "preserves existing chunk voting; 'drop' removes chunks crossing a "
             "policy/human boundary and transitions that bootstrap into one."
+        ),
+    )
+    p.add_argument(
+        "--residual-delta-scale",
+        type=float,
+        default=0.1,
+        help=(
+            "Residual actor correction bound used only for cache audit output. "
+            "Set this to the same value as --policy.actor_delta_scale."
         ),
     )
     return p.parse_args()
@@ -475,17 +484,18 @@ def _encoded_episode_to_transitions(
         usable_by_anchor[start_frame] = usable
         transition.source = torch.tensor(source)
         transition.intervention = torch.tensor(float(human_override))
-        if human_override and human_reference_mode == "executed":
-            transition.ref_chunk = transition.exec_chunk.clone()
+        # Never overwrite proposal/ref: training and deployment must condition
+        # on the same independently generated VLA action. Only the BC target is
+        # replaced on human chunks.
+        transition.proposal_chunk = transition.ref_chunk
+        transition.bc_target_chunk = (
+            transition.exec_chunk.clone()
+            if human_override and human_reference_mode == "executed"
+            else transition.proposal_chunk
+        )
+        transition.next_proposal_chunk = transition.next_ref_chunk
 
-    # A target action is conditioned on x_{t+C}. If that next anchor is a
-    # human-override chunk, propagate its repaired ref rather than retaining
-    # the original VLA proposal.
     anchor_to_index = {anchor: index for index, anchor in enumerate(start_anchors)}
-    for transition, start_frame in zip(transitions, start_anchors, strict=True):
-        next_index = anchor_to_index.get(start_frame + chunk_length)
-        if next_index is not None and usable_by_anchor[start_anchors[next_index]]:
-            transition.next_ref_chunk = transitions[next_index].ref_chunk.clone()
 
     should_filter = (
         provenance.intervention_stage is not None
@@ -597,21 +607,48 @@ def _encode_episode(
     )
 
 
-def _transition_summary(transitions: list[ChunkTransition]) -> str:
+def _transition_summary(
+    transitions: list[ChunkTransition], residual_delta_scale: float = 0.1,
+) -> str:
+    if residual_delta_scale <= 0:
+        raise ValueError("residual_delta_scale must be positive")
     source_counts: dict[int, int] = {}
     success_terminal = 0
     failure_terminal = 0
+    human_squared_error = 0.0
+    human_elements = 0
+    human_delta_abs_max = 0.0
+    human_outside_bound = 0
+    human_samples = 0
     for transition in transitions:
         source = int(transition.source.item())
         source_counts[source] = source_counts.get(source, 0) + 1
+        if source == TRANSITION_SOURCE_HUMAN_OVERRIDE:
+            delta = (
+                transition.bc_target_chunk.clamp(-1.0, 1.0)
+                - transition.proposal_chunk.clamp(-1.0, 1.0)
+            )
+            human_squared_error += float(delta.square().sum().item())
+            human_elements += delta.numel()
+            human_delta_abs_max = max(human_delta_abs_max, float(delta.abs().max().item()))
+            human_outside_bound += int(
+                float(delta.abs().max().item()) > residual_delta_scale + 1e-6
+            )
+            human_samples += 1
         if bool(transition.done.item()):
             if float(transition.reward_seq.sum().item()) > 0:
                 success_terminal += 1
             else:
                 failure_terminal += 1
+    human_rmse = (human_squared_error / max(human_elements, 1)) ** 0.5
     return (
         f"sources={dict(sorted(source_counts.items()))} "
-        f"terminal_success={success_terminal} terminal_failure={failure_terminal}"
+        f"terminal_success={success_terminal} terminal_failure={failure_terminal} "
+        f"human_vla_action_rmse={human_rmse:.6f} "
+        f"human_vla_action_abs_max={human_delta_abs_max:.6f} "
+        "human_target_outside_residual_bound_frac="
+        f"{human_outside_bound / max(human_samples, 1):.6f} "
+        f"residual_delta_scale={residual_delta_scale:.6f}"
     )
 
 
@@ -765,7 +802,10 @@ def main() -> None:
                 all_tx.extend(ep_tx)
                 if (k + 1) % 5 == 0 or (k + 1) == len(eps):
                     _save_partial(out_dir, split_name, all_tx, f"{split_name} ep {k+1}/{len(eps)}")
-            _log(f"  [{split_name}] final {_transition_summary(all_tx)}")
+            _log(
+                f"  [{split_name}] final "
+                f"{_transition_summary(all_tx, args.residual_delta_scale)}"
+            )
     finally:
         capture.detach()
 

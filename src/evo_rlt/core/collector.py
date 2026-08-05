@@ -6,6 +6,7 @@ import torch
 
 from evo_rlt.core.interfaces import (
     TRANSITION_SOURCE_RL_AUTONOMOUS,
+    TRANSITION_SOURCE_HUMAN_OVERRIDE,
     TRANSITION_SOURCE_WARMUP_VLA,
     ChunkTransition,
     Observation,
@@ -112,22 +113,29 @@ def _build_transition(
     source: int = 0,
     episode_id: int = -1,
     is_critical: float = 0.0,
+    bc_target_chunk: torch.Tensor | None = None,
 ) -> ChunkTransition:
     """Build a ChunkTransition, squeezing batch dims if present."""
     sq = lambda t: t.squeeze(0) if t.dim() > 1 and t.shape[0] == 1 else t
+    proposal = sq(ref_chunk)
+    next_proposal = sq(next_ref_chunk)
+    bc_target = proposal if bc_target_chunk is None else sq(bc_target_chunk)
     return ChunkTransition(
         state_vec=sq(state_vec),
         exec_chunk=sq(action_chunk),
-        ref_chunk=sq(ref_chunk),
+        ref_chunk=proposal,
         reward_seq=reward_seq,
         next_state_vec=sq(next_state_vec),
-        next_ref_chunk=sq(next_ref_chunk),
+        next_ref_chunk=next_proposal,
         done=torch.tensor(float(done)),
         intervention=torch.tensor(float(intervention)),
         actual_steps=torch.tensor(actual_steps),
         source=torch.tensor(source),
         episode_id=torch.tensor(episode_id),
         is_critical=torch.tensor(is_critical),
+        proposal_chunk=proposal,
+        bc_target_chunk=bc_target,
+        next_proposal_chunk=next_proposal,
     )
 
 
@@ -208,7 +216,13 @@ def rl_collect_step(
     transition = _build_transition(
         state_vec, action_chunk, ref_chunk, reward_seq,
         next_state_vec, next_ref_chunk, done, intervention, len(rewards),
-        source=TRANSITION_SOURCE_RL_AUTONOMOUS, episode_id=episode_id,
+        source=(
+            TRANSITION_SOURCE_HUMAN_OVERRIDE
+            if intervention
+            else TRANSITION_SOURCE_RL_AUTONOMOUS
+        ),
+        episode_id=episode_id,
+        bc_target_chunk=action_chunk if intervention else ref_chunk,
     )
     replay_buffer.add(transition)
 

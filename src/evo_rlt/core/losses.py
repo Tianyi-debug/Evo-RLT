@@ -113,14 +113,16 @@ def critic_loss_with_diagnostics(
     x = batch["state_vec"]
     a = batch["exec_chunk_flat"]
     x_next = batch["next_state_vec"]
-    ref_next = batch["next_ref_flat"]
+    proposal_next = batch.get("next_proposal_flat", batch.get("next_ref_flat"))
+    if proposal_next is None:
+        raise KeyError("critic loss requires next_proposal_flat (or legacy next_ref_flat)")
     reward_seq = batch["reward_seq"]
     done = batch["done"]
     actual_steps = batch.get("actual_steps")
 
     with torch.no_grad():
         # Use deterministic mean for target action (TD3-style), clamped to [-1,1]
-        mu_next, _ = actor.forward(x_next, ref_next)
+        mu_next, _ = actor.forward(x_next, proposal_next)
         mu_next = mu_next.clamp(-1.0, 1.0)
         q_next = target_critic.min_q(x_next, mu_next)
         if target_q_clip is not None and target_q_clip > 0:
@@ -209,16 +211,21 @@ def actor_loss_with_diagnostics(
     uncertainty_tau_high: float = 1.0,
     uncertainty_kappa: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Q-maximization + BC regularization toward VLA reference.
+    """Q-maximization plus BC toward an independently selected target.
 
-    Uses deterministic mean (not noisy samples) for stable optimization.
+    The actor always receives the VLA proposal. Autonomous chunks use that
+    proposal as their BC target; HIL chunks can instead use the executed human
+    correction. Uses deterministic mean (not noisy samples) for stability.
     BC term is the per-sample squared distance summed across action dims, then
     averaged over the batch — matching the paper's β-scaling convention. This
     differs from mean-MSE by a factor of C*D_flat.
     """
     x = batch["state_vec"]
-    ref = batch["ref_chunk_flat"]
-    mu, _ = actor.forward(x, ref, training=True)
+    proposal = batch.get("proposal_chunk_flat", batch.get("ref_chunk_flat"))
+    if proposal is None:
+        raise KeyError("actor loss requires proposal_chunk_flat (or legacy ref_chunk_flat)")
+    bc_target_raw = batch.get("bc_target_chunk_flat", proposal)
+    mu, _ = actor.forward(x, proposal, training=True)
     if callable(critic):
         q1, q2 = critic(x, mu)
     else:
@@ -256,9 +263,9 @@ def actor_loss_with_diagnostics(
     rho = rho.detach()
     beta_per_sample = beta_per_sample.detach()
     bc_target = (
-        ref.clamp(-1.0, 1.0)
+        bc_target_raw.clamp(-1.0, 1.0)
         if getattr(actor, "action_residual", False)
-        else ref
+        else bc_target_raw
     )
     bc_per_sample = ((mu - bc_target) ** 2).sum(dim=-1)
     q_loss = -q.mean()
@@ -271,7 +278,10 @@ def actor_loss_with_diagnostics(
         "loss_actor_bc_raw": bc_raw.detach(),
         "loss_actor_bc_weighted": bc_weighted.detach(),
         "actor_q_min_mean": q.detach().mean(),
-        "actor_ref_rmse": ((mu.detach() - bc_target.detach()) ** 2).mean().sqrt(),
+        "actor_ref_rmse": (
+            (mu.detach() - proposal.detach().clamp(-1.0, 1.0)) ** 2
+        ).mean().sqrt(),
+        "actor_bc_target_rmse": ((mu.detach() - bc_target.detach()) ** 2).mean().sqrt(),
         "actor_disagreement_mean": disagreement.mean(),
         "actor_disagreement_p50": torch.quantile(disagreement, 0.50),
         "actor_disagreement_p90": torch.quantile(disagreement, 0.90),
@@ -294,5 +304,33 @@ def actor_loss_with_diagnostics(
             if bool(mask.any()):
                 diagnostics[f"source_{source_id}_disagreement_mean"] = disagreement[mask].mean()
                 diagnostics[f"source_{source_id}_beta_mean"] = beta_per_sample[mask].mean()
+
+    intervention = batch.get("intervention")
+    if source is not None:
+        human_mask = source == 3
+    elif intervention is not None:
+        human_mask = intervention.detach().reshape(-1).to(disagreement.device) > 0.5
+    else:
+        human_mask = torch.zeros_like(disagreement, dtype=torch.bool)
+
+    zero = disagreement.new_zeros(())
+    diagnostics["human_sample_frac"] = human_mask.float().mean()
+    if bool(human_mask.any()):
+        executable_proposal = proposal.detach().clamp(-1.0, 1.0)
+        executable_target = bc_target.detach()
+        human_delta = executable_target[human_mask] - executable_proposal[human_mask]
+        diagnostics["human_vla_action_rmse"] = human_delta.square().mean().sqrt()
+        if getattr(actor, "action_residual", False):
+            outside = human_delta.abs().amax(dim=-1) > float(actor.delta_scale) + 1e-6
+            diagnostics["human_target_outside_residual_bound_frac"] = outside.float().mean()
+        else:
+            diagnostics["human_target_outside_residual_bound_frac"] = zero
+        diagnostics["human_bc_target_rmse"] = (
+            (mu.detach()[human_mask] - executable_target[human_mask]).square().mean().sqrt()
+        )
+    else:
+        diagnostics["human_vla_action_rmse"] = zero
+        diagnostics["human_target_outside_residual_bound_frac"] = zero
+        diagnostics["human_bc_target_rmse"] = zero
 
     return loss, diagnostics

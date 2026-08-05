@@ -47,14 +47,18 @@ def test_sample_shapes():
     batch = buf.sample(8)
     assert batch["state_vec"].shape == (8, STATE_DIM)
     assert batch["exec_chunk_flat"].shape == (8, C * ACTION_DIM)
+    assert batch["proposal_chunk_flat"].shape == (8, C * ACTION_DIM)
+    assert batch["bc_target_chunk_flat"].shape == (8, C * ACTION_DIM)
     assert batch["ref_chunk_flat"].shape == (8, C * ACTION_DIM)
     assert batch["reward_seq"].shape == (8, C)
     assert batch["next_state_vec"].shape == (8, STATE_DIM)
     assert batch["next_ref_flat"].shape == (8, C * ACTION_DIM)
+    assert batch["next_proposal_flat"].shape == (8, C * ACTION_DIM)
     assert batch["done"].shape == (8,)
     assert batch["source"].shape == (8,)
     assert batch["episode_id"].shape == (8,)
     assert batch["is_critical"].shape == (8,)
+    assert batch["intervention"].shape == (8,)
 
 
 def test_sample_capped_by_buffer_size():
@@ -70,8 +74,25 @@ def test_batch_keys():
     buf.add(_make_transition())
     batch = buf.sample(1)
     expected_keys = {
-        "state_vec", "exec_chunk_flat", "ref_chunk_flat",
-        "reward_seq", "next_state_vec", "next_ref_flat", "done", "actual_steps",
-        "source", "episode_id", "is_critical",
+        "state_vec", "exec_chunk_flat", "proposal_chunk_flat", "bc_target_chunk_flat",
+        "next_proposal_flat", "ref_chunk_flat", "reward_seq", "next_state_vec",
+        "next_ref_flat", "done", "actual_steps", "source", "episode_id",
+        "is_critical", "intervention",
     }
     assert set(batch.keys()) == expected_keys
+
+
+def test_sample_keeps_proposal_and_human_bc_target_separate():
+    transition = _make_transition()
+    transition.proposal_chunk = torch.zeros(C, ACTION_DIM)
+    transition.ref_chunk = transition.proposal_chunk
+    transition.bc_target_chunk = torch.ones(C, ACTION_DIM)
+    transition.intervention = torch.tensor(1.0)
+    buf = ReplayBuffer(capacity=1)
+    buf.add(transition)
+
+    batch = buf.sample(1)
+
+    assert torch.equal(batch["proposal_chunk_flat"], torch.zeros(1, C * ACTION_DIM))
+    assert torch.equal(batch["ref_chunk_flat"], batch["proposal_chunk_flat"])
+    assert torch.equal(batch["bc_target_chunk_flat"], torch.ones(1, C * ACTION_DIM))

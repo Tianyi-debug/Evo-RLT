@@ -313,6 +313,42 @@ def test_disagreement_actor_loss_rejects_invalid_schedule(actor, critic, batch):
         )
 
 
+def test_human_bc_target_is_separate_from_actor_proposal_and_reports_bound():
+    proposal = torch.zeros(2, 4)
+    human_target = torch.full((2, 4), 0.5)
+    seen = {}
+
+    class StubResidualActor:
+        action_residual = True
+        delta_scale = 0.1
+
+        def forward(self, state_vec, proposal_chunk, training=False):
+            seen["proposal"] = proposal_chunk
+            return proposal_chunk, torch.zeros_like(proposal_chunk)
+
+    class StubCritic:
+        def min_q(self, state_vec, action):
+            return torch.zeros(state_vec.shape[0], 1)
+
+    loss, diagnostics = actor_loss_with_diagnostics(
+        StubResidualActor(),
+        StubCritic(),
+        {
+            "state_vec": torch.zeros(2, 3),
+            "proposal_chunk_flat": proposal,
+            "bc_target_chunk_flat": human_target,
+            "source": torch.tensor([3, 3]),
+        },
+        beta=1.0,
+    )
+
+    assert seen["proposal"] is proposal
+    assert loss.item() == pytest.approx(4 * 0.5**2)
+    assert diagnostics["human_vla_action_rmse"].item() == pytest.approx(0.5)
+    assert diagnostics["human_target_outside_residual_bound_frac"].item() == 1.0
+    assert diagnostics["human_bc_target_rmse"].item() == pytest.approx(0.5)
+
+
 def test_target_is_stop_gradiented(actor, critic, target_critic, batch):
     """Target critic params should not receive gradients through critic_loss."""
     loss = critic_loss(critic, target_critic, actor, batch, gamma=0.99, C=C)

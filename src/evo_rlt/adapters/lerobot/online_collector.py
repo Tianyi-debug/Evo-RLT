@@ -4,9 +4,14 @@ import logging
 
 import torch
 
-from evo_rlt.core.interfaces import ChunkTransition
+from evo_rlt.core.interfaces import (
+    TRANSITION_SOURCE_HUMAN_OVERRIDE,
+    TRANSITION_SOURCE_RL_AUTONOMOUS,
+    TRANSITION_SOURCE_WARMUP_VLA,
+    ChunkTransition,
+)
 from evo_rlt.core.replay_buffer import ReplayBuffer
-from evo_rlt.adapters.lerobot.record.annotations import SOURCE_HUMAN
+from evo_rlt.adapters.lerobot.record.annotations import SOURCE_HUMAN, SOURCE_RL
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +61,7 @@ class RLTOnlineCollector:
                 self._chunk_ref = ref_chunk
             elif self._prev_transition is not None:
                 self._chunk_state = self._prev_transition.next_state_vec
-                self._chunk_ref = self._prev_transition.next_ref_chunk
+                self._chunk_ref = self._prev_transition.next_proposal_chunk
             self._chunk_is_critical = is_critical
 
         self._frame_actions.append(action.detach().cpu())
@@ -93,9 +98,16 @@ class RLTOnlineCollector:
 
         # Deterministic tie-break: human wins ties (highest priority)
         dominant_source = max(set(self._frame_sources), key=lambda s: (self._frame_sources.count(s), s))
-        ref = self._chunk_ref.cpu()
-        if dominant_source == SOURCE_HUMAN:
-            ref = exec_chunk.clone()
+        proposal = self._chunk_ref.cpu()
+        human_override = dominant_source == SOURCE_HUMAN
+        bc_target = exec_chunk.clone() if human_override else proposal
+        transition_source = (
+            TRANSITION_SOURCE_HUMAN_OVERRIDE
+            if human_override
+            else TRANSITION_SOURCE_RL_AUTONOMOUS
+            if dominant_source == SOURCE_RL
+            else TRANSITION_SOURCE_WARMUP_VLA
+        )
 
         state = self._chunk_state.cpu()
         # TODO(online-rl): inject terminal success reward here before real-robot online RL
@@ -104,21 +116,25 @@ class RLTOnlineCollector:
         transition = ChunkTransition(
             state_vec=state,
             exec_chunk=exec_chunk,
-            ref_chunk=ref,
+            ref_chunk=proposal,
             reward_seq=torch.zeros(self._C),
             next_state_vec=state,
-            next_ref_chunk=ref,
+            next_ref_chunk=proposal,
             done=torch.tensor(float(done)),
-            intervention=torch.tensor(float(dominant_source == SOURCE_HUMAN)),
+            intervention=torch.tensor(float(human_override)),
             actual_steps=torch.tensor(actual),
-            source=torch.tensor(int(dominant_source)),
+            source=torch.tensor(transition_source),
             episode_id=torch.tensor(self._episode_id),
             is_critical=torch.tensor(self._chunk_is_critical),
+            proposal_chunk=proposal,
+            bc_target_chunk=bc_target,
+            next_proposal_chunk=proposal,
         )
 
         if self._prev_transition is not None:
             self._prev_transition.next_state_vec = state.clone()
-            self._prev_transition.next_ref_chunk = ref.clone()
+            self._prev_transition.next_ref_chunk = proposal.clone()
+            self._prev_transition.next_proposal_chunk = proposal.clone()
 
         self._buffer.add(transition)
         self._prev_transition = transition

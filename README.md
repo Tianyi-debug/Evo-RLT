@@ -322,7 +322,7 @@ evo-rlt-build-transition-cache-v2 \
 ```
 
 The v2 cache stores the recorded dataset action as `exec_chunk`, the pi0.5
-proposal as `ref_chunk`, bootstraps from `x_{t+C}`, and reads per-episode
+proposal as `proposal_chunk`, an independent `bc_target_chunk`, bootstraps from `x_{t+C}`, and reads per-episode
 `episode_success` metadata for the terminal reward. Missing labels are rejected
 by default. For a verified all-success legacy dataset, explicitly pass
 `--missing-episode-success success`.
@@ -330,9 +330,11 @@ by default. For a verified all-success legacy dataset, explicitly pass
 When the dataset contains the unified
 `complementary_info.is_intervention` and
 `complementary_info.collector_policy_id` columns, the default
-`--provenance-mode auto` preserves mixed expert/online semantics:
-human-dominant takeover chunks use the executed human action as `ref_chunk`,
-while autonomous VLA/RLT chunks keep the VLA proposal. Episode splitting is
+`--provenance-mode auto` preserves mixed expert/online semantics. The actor
+always receives the VLA `proposal_chunk`; human-dominant takeover chunks use
+the executed human action as `bc_target_chunk`, while autonomous chunks use
+the VLA proposal as their BC target. `exec_chunk` always remains the action
+actually executed for critic TD learning. Episode splitting is
 stratified by collector source, intervention, and success/failure by default.
 Use `--provenance-mode demo` only to force legacy all-demo behavior.
 
@@ -376,7 +378,9 @@ For SmolVLA, set `--policy.vla_type=smolvla`. The actor-critic config reads the 
 
 AC semantics v2 normalizes the high-magnitude RL-token slice before the
 actor/critic MLPs and trains a zero-initialized, bounded action delta around the
-VLA reference. Unversioned local AC checkpoints keep the legacy absolute-action
+VLA proposal. Proposal/BC-target-separated caches let HIL samples supervise the
+mapping from a VLA mistake to the human correction without changing the
+actor's deployment-time input. Unversioned local AC checkpoints keep the legacy absolute-action
 semantics when loaded; retrain them with v2 instead of resuming them.
 
 <a id="real-robot-recording-and-deployment"></a>

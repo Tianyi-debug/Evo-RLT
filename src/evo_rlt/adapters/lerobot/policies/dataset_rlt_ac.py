@@ -40,10 +40,11 @@ class ChunkTransitionDataset(Dataset):
     list of dicts with the fields produced by `build_transition_cache.py`:
       state_vec      (state_dim,)
       exec_chunk     (C, action_dim)
-      ref_chunk      (C, action_dim)
+      proposal_chunk (C, action_dim), independently generated VLA proposal
+      bc_target_chunk (C, action_dim), VLA or executed human target
       reward_seq     (C,)
       next_state_vec (state_dim,)
-      next_ref_chunk (C, action_dim)
+      next_proposal_chunk (C, action_dim)
       done           ()
       intervention   ()
       actual_steps   ()
@@ -51,7 +52,8 @@ class ChunkTransitionDataset(Dataset):
 
     The stored fields are returned unchanged and a stable `cache_index` is
     injected from the sample position. Flattening for `exec_chunk_flat` /
-    `ref_chunk_flat` / `next_ref_flat` is deferred to ChunkACPolicy.forward.
+    flattened proposal/target views is deferred to ChunkACPolicy.forward. Old
+    ref-only caches remain readable but cannot recover overwritten proposals.
     """
 
     def __init__(self, cache_dir: str | pathlib.Path, split: str = "train"):

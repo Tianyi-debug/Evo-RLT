@@ -144,17 +144,28 @@ def _load_samples(
 
 
 def _batch(samples: list[dict[str, Tensor]], device: str) -> dict[str, Tensor]:
+    proposals = [sample.get("proposal_chunk", sample["ref_chunk"]) for sample in samples]
+    bc_targets = [sample.get("bc_target_chunk", proposal) for sample, proposal in zip(samples, proposals)]
+    next_proposals = [
+        sample.get("next_proposal_chunk", sample["next_ref_chunk"])
+        for sample in samples
+    ]
     return {
         "state_vec": torch.stack([sample["state_vec"] for sample in samples]).to(device),
         "exec_chunk_flat": torch.stack([sample["exec_chunk"] for sample in samples])
         .flatten(start_dim=-2)
         .to(device),
-        "ref_chunk_flat": torch.stack([sample["ref_chunk"] for sample in samples])
+        "proposal_chunk_flat": torch.stack(proposals)
         .flatten(start_dim=-2)
         .to(device),
+        "bc_target_chunk_flat": torch.stack(bc_targets).flatten(start_dim=-2).to(device),
+        "ref_chunk_flat": torch.stack(proposals).flatten(start_dim=-2).to(device),
         "reward_seq": torch.stack([sample["reward_seq"] for sample in samples]).to(device),
         "next_state_vec": torch.stack([sample["next_state_vec"] for sample in samples]).to(device),
-        "next_ref_flat": torch.stack([sample["next_ref_chunk"] for sample in samples])
+        "next_proposal_flat": torch.stack(next_proposals)
+        .flatten(start_dim=-2)
+        .to(device),
+        "next_ref_flat": torch.stack(next_proposals)
         .flatten(start_dim=-2)
         .to(device),
         "done": torch.stack([sample["done"] for sample in samples]).reshape(-1).to(device),
@@ -163,6 +174,9 @@ def _batch(samples: list[dict[str, Tensor]], device: str) -> dict[str, Tensor]:
         .to(device),
         "source": torch.stack(
             [sample.get("source", torch.tensor(0)) for sample in samples]
+        ).reshape(-1).to(device),
+        "intervention": torch.stack(
+            [sample.get("intervention", torch.tensor(0.0)) for sample in samples]
         ).reshape(-1).to(device),
     }
 
