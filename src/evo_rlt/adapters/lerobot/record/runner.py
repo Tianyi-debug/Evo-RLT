@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import runpy
@@ -16,6 +17,7 @@ from typing import Any
 
 from evo_rlt.adapters.lerobot import register
 from evo_rlt.adapters.lerobot.record.common import (
+    RunPaths,
     build_dataset_argv,
     build_policy_overrides,
     build_robot_argv,
@@ -32,6 +34,53 @@ from evo_rlt.adapters.lerobot.record.common import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_full_recording_target(
+    args: argparse.Namespace,
+    setup: dict[str, Any],
+    dataset_prefix: str,
+) -> tuple[RunPaths, int, bool]:
+    resume_root_arg = getattr(args, "resume_dataset_root", None)
+    if resume_root_arg is None:
+        return resolve_run_paths(setup, args.dataset_tag, dataset_prefix), args.num_episodes, False
+
+    dataset_root = Path(resume_root_arg).expanduser().resolve()
+    info_path = dataset_root / "meta" / "info.json"
+    if not dataset_root.is_dir() or not info_path.is_file():
+        raise FileNotFoundError(
+            f"Resume dataset must contain meta/info.json: {dataset_root}"
+        )
+
+    try:
+        info = json.loads(info_path.read_text())
+        existing_episodes = int(info["total_episodes"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError(f"Invalid resume dataset metadata: {info_path}") from error
+
+    if existing_episodes < 0:
+        raise ValueError(f"Invalid total_episodes={existing_episodes} in {info_path}")
+    episodes_to_record = args.num_episodes - existing_episodes
+    if episodes_to_record <= 0:
+        raise ValueError(
+            f"Resume target is already reached: dataset has {existing_episodes} episodes, "
+            f"target total is {args.num_episodes}."
+        )
+
+    dataset_fps = info.get("fps")
+    if dataset_fps is not None and float(dataset_fps) != float(args.fps):
+        raise ValueError(
+            f"Resume FPS mismatch: dataset uses {dataset_fps}, command requested {args.fps}."
+        )
+
+    resume_stamp = time.strftime("%H%M%S")
+    paths = RunPaths(
+        dataset_name=f"local/{dataset_root.name}",
+        dataset_root=dataset_root,
+        day_dir=dataset_root.parent,
+        log_file=dataset_root.parent / f"{dataset_root.name}_resume_{resume_stamp}.log",
+    )
+    return paths, episodes_to_record, True
 
 
 def prepare_lerobot_runtime(
@@ -1108,9 +1157,14 @@ def run_full(args: argparse.Namespace) -> None:
     setup = load_robot_setup(args.setup_json)
     apply_manifest_reset_pose(args, setup.setup)
     dataset_prefix = _policy_dataset_prefix(f"{args.initial_source}_full", args.policy_path)
-    paths = resolve_run_paths(setup.setup, args.dataset_tag, dataset_prefix)
+    paths, episodes_to_record, resume = _resolve_full_recording_target(
+        args,
+        setup.setup,
+        dataset_prefix,
+    )
     configure_logging(paths.log_file, args.log_level)
-    remove_existing_dataset(paths.dataset_root)
+    if not resume:
+        remove_existing_dataset(paths.dataset_root)
     teleop_argv = build_teleop_argv(setup.leaders, args.no_teleop)
 
     if args.initial_source == "vla" and args.policy_path is None:
@@ -1138,11 +1192,12 @@ def run_full(args: argparse.Namespace) -> None:
                 dataset_name=paths.dataset_name,
                 dataset_root=paths.dataset_root,
                 task=args.task,
-                num_episodes=args.num_episodes,
+                num_episodes=episodes_to_record,
                 episode_time_s=args.episode_time_s,
                 fps=args.fps,
                 vcodec=args.vcodec,
             ),
+            *(["--resume=true"] if resume else []),
             *build_reset_time_argv(args),
             *build_auto_reset_pose_argv(args),
             *build_display_data_argv(args.display_data),

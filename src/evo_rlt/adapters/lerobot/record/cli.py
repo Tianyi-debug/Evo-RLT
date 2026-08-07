@@ -158,6 +158,14 @@ def build_parser() -> argparse.ArgumentParser:
     full.add_argument("--reset-pose-duration-s", type=float, default=3.0)
     full.add_argument("--reset-pose-recapture", action=argparse.BooleanOptionalAction, default=False)
     full.add_argument(
+        "--resume-dataset-root",
+        default=None,
+        help=(
+            "Append to an existing full-record dataset directory. In this mode, "
+            "--num-episodes is the target total episode count, not the number to add."
+        ),
+    )
+    full.add_argument(
         "--display-data",
         action=argparse.BooleanOptionalAction,
         default=False,

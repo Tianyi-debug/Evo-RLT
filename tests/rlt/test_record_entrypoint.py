@@ -20,6 +20,7 @@ from evo_rlt.adapters.lerobot.record.runner import (
     _collect_external_episode_outcome_key,
     _patch_double_tap_episode_outcome_listener,
     _policy_dataset_prefix,
+    _resolve_full_recording_target,
     _patch_skip_policyless_reset_loop,
     build_auto_reset_pose_argv,
     build_default_collect_record_argv,
@@ -92,6 +93,62 @@ def test_full_local_display_forwards_to_record_backend():
     assert build_display_data_argv(args.display_data) == ["--display_data=true"]
     assert default_args.display_data is False
     assert build_display_data_argv(default_args.display_data) == []
+
+
+def test_full_resume_uses_target_total_episode_count(tmp_path):
+    dataset_root = tmp_path / "teleop_full_161057"
+    (dataset_root / "meta").mkdir(parents=True)
+    (dataset_root / "meta" / "info.json").write_text(
+        json.dumps({"total_episodes": 16, "fps": 30})
+    )
+    parser = build_parser()
+    args = parser.parse_args([
+        "full",
+        "--initial-source",
+        "teleop",
+        "--num-episodes",
+        "75",
+        "--fps",
+        "30",
+        "--resume-dataset-root",
+        str(dataset_root),
+    ])
+
+    paths, episodes_to_record, resume = _resolve_full_recording_target(
+        args,
+        {"datasets": {"root": str(tmp_path)}},
+        "teleop_full",
+    )
+
+    assert resume is True
+    assert episodes_to_record == 59
+    assert paths.dataset_root == dataset_root.resolve()
+    assert paths.dataset_name == "local/teleop_full_161057"
+
+
+def test_full_resume_rejects_reached_target(tmp_path):
+    dataset_root = tmp_path / "teleop_full_161057"
+    (dataset_root / "meta").mkdir(parents=True)
+    (dataset_root / "meta" / "info.json").write_text(
+        json.dumps({"total_episodes": 16, "fps": 30})
+    )
+    parser = build_parser()
+    args = parser.parse_args([
+        "full",
+        "--initial-source",
+        "teleop",
+        "--num-episodes",
+        "16",
+        "--resume-dataset-root",
+        str(dataset_root),
+    ])
+
+    with pytest.raises(ValueError, match="target is already reached"):
+        _resolve_full_recording_target(
+            args,
+            {"datasets": {"root": str(tmp_path)}},
+            "teleop_full",
+        )
 
 
 def test_full_gaussian_exploration_forwards_policy_override():
