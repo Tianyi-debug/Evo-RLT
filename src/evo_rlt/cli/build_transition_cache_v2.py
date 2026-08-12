@@ -75,6 +75,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="cuda")
     p.add_argument("--max-episodes", type=int, default=None,
                    help="Cap on episodes to process (debug).")
+    p.add_argument(
+        "--exclude-episode-indices",
+        type=int,
+        nargs="*",
+        default=[],
+        help=(
+            "Dataset episode indices to skip before the train/validation split. "
+            "The source dataset is not modified."
+        ),
+    )
     p.add_argument("--video-backend", default="pyav",
                    help="Video decoder backend passed to LeRobotDataset.")
     p.add_argument("--tolerance-s", type=float, default=0.04,
@@ -319,17 +329,28 @@ def _split_episode_indices(
     missing_episode_success: str,
     provenance: FrameProvenance | None,
     stratify_provenance: bool,
+    episode_ids: list[int] | None = None,
 ) -> tuple[list[int], list[int], dict[str, dict[str, int]]]:
     if not 0.0 <= train_ratio <= 1.0:
         raise ValueError(f"train_ratio must be within [0, 1], got {train_ratio}")
+    selected_episode_ids = list(range(n_episodes)) if episode_ids is None else list(episode_ids)
+    if len(selected_episode_ids) != len(set(selected_episode_ids)):
+        raise ValueError("episode_ids contains duplicates")
+    invalid_episode_ids = sorted(
+        episode_id for episode_id in selected_episode_ids if not 0 <= episode_id < n_episodes
+    )
+    if invalid_episode_ids:
+        raise ValueError(
+            f"episode_ids contains indices outside [0, {n_episodes}): {invalid_episode_ids}"
+        )
     if provenance is None or not stratify_provenance:
-        episode_ids = list(range(n_episodes))
-        random.Random(seed).shuffle(episode_ids)
-        n_train = int(train_ratio * n_episodes)
-        return episode_ids[:n_train], episode_ids[n_train:], {}
+        shuffled_episode_ids = list(selected_episode_ids)
+        random.Random(seed).shuffle(shuffled_episode_ids)
+        n_train = int(train_ratio * len(shuffled_episode_ids))
+        return shuffled_episode_ids[:n_train], shuffled_episode_ids[n_train:], {}
 
     groups: dict[tuple[str, str], list[int]] = {}
-    for ep_id in range(n_episodes):
+    for ep_id in selected_episode_ids:
         source_group = _episode_provenance_group(dataset, provenance, ep_id)
         outcome = (
             "success"
@@ -716,7 +737,25 @@ def main() -> None:
     n_episodes = dataset.num_episodes
     if args.max_episodes is not None:
         n_episodes = min(n_episodes, args.max_episodes)
-    _log(f"episodes: {n_episodes} of {dataset.num_episodes}; batch_size={args.batch_size} num_workers={args.num_workers}")
+    excluded_episode_ids = sorted(set(args.exclude_episode_indices))
+    invalid_excluded_ids = [
+        episode_id for episode_id in excluded_episode_ids if not 0 <= episode_id < n_episodes
+    ]
+    if invalid_excluded_ids:
+        raise ValueError(
+            f"--exclude-episode-indices contains indices outside [0, {n_episodes}): "
+            f"{invalid_excluded_ids}"
+        )
+    selected_episode_ids = [
+        episode_id for episode_id in range(n_episodes) if episode_id not in excluded_episode_ids
+    ]
+    if n_episodes > 0 and not selected_episode_ids:
+        raise ValueError("All selected episodes were excluded")
+    _log(
+        f"episodes: selected={len(selected_episode_ids)} of {n_episodes} "
+        f"(dataset total={dataset.num_episodes}, excluded={excluded_episode_ids}); "
+        f"batch_size={args.batch_size} num_workers={args.num_workers}"
+    )
 
     vla = policy._pi05
     rl_token = policy.rl_token
@@ -738,6 +777,7 @@ def main() -> None:
             missing_episode_success=args.missing_episode_success,
             provenance=provenance,
             stratify_provenance=args.stratify_provenance,
+            episode_ids=selected_episode_ids,
         )
         _log(f"split: train={len(train_eps)} val={len(val_eps)}")
         for group, counts in split_summary.items():

@@ -407,6 +407,50 @@ def test_transition_cache_v2_stratifies_source_and_outcome_groups():
     }
 
 
+def test_transition_cache_v2_stratification_honors_selected_episode_ids():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    class Episodes:
+        def __getitem__(self, key):
+            values = {
+                "dataset_from_index": [0, 2, 4, 6, 8, 10],
+                "dataset_to_index": [2, 4, 6, 8, 10, 12],
+                "episode_success": [
+                    "success",
+                    "success",
+                    "success",
+                    "failure",
+                    "success",
+                    "failure",
+                ],
+            }
+            return values[key]
+
+    dataset = SimpleNamespace(meta=SimpleNamespace(episodes=Episodes()))
+    provenance = module.FrameProvenance(
+        is_intervention=torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0]),
+        collector_policy_id=torch.tensor([0, 0, 0, 0, 2, 2, 2, 2, 0, 0, 2, 2]),
+    )
+
+    train, val, summary = module._split_episode_indices(
+        dataset=dataset,
+        n_episodes=6,
+        train_ratio=0.5,
+        seed=42,
+        missing_episode_success="error",
+        provenance=provenance,
+        stratify_provenance=True,
+        episode_ids=[0, 1, 3, 5],
+    )
+
+    assert sorted(train + val) == [0, 1, 3, 5]
+    assert set(train).isdisjoint(val)
+    assert summary == {
+        "demo/success": {"total": 2, "train": 1, "val": 1},
+        "online_rl_autonomous/failure": {"total": 2, "train": 1, "val": 1},
+    }
+
+
 def test_transition_cache_v2_extracts_preprocessed_exec_action():
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 
