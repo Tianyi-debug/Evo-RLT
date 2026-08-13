@@ -212,6 +212,37 @@ def test_full_resume_rejects_reached_target(tmp_path):
         )
 
 
+def test_collect_resume_uses_target_total_episode_count(tmp_path):
+    dataset_root = tmp_path / "eval_vla_rlt_vla_221325"
+    (dataset_root / "meta").mkdir(parents=True)
+    (dataset_root / "meta" / "info.json").write_text(
+        json.dumps({"total_episodes": 4, "fps": 30})
+    )
+    parser = build_parser()
+    args = parser.parse_args([
+        "collect",
+        "--policy-path",
+        "/tmp/ac",
+        "--num-episodes",
+        "20",
+        "--fps",
+        "30",
+        "--resume-dataset-root",
+        str(dataset_root),
+    ])
+
+    paths, episodes_to_record, resume = _resolve_full_recording_target(
+        args,
+        {"datasets": {"root": str(tmp_path)}},
+        "eval_vla_rlt_vla",
+    )
+
+    assert resume is True
+    assert episodes_to_record == 16
+    assert paths.dataset_root == dataset_root.resolve()
+    assert paths.dataset_name == "local/eval_vla_rlt_vla_221325"
+
+
 def test_full_gaussian_exploration_forwards_policy_override():
     parser = build_parser()
     args = parser.parse_args([
@@ -432,6 +463,7 @@ def test_default_collect_parser_uses_open_source_safe_defaults():
     assert args.teleop_toggle_key == "space"
     assert args.start_with_teleop is False
     assert args.only_critical is False
+    assert args.resume_dataset_root is None
     assert args.rtc is True
     assert args.rtc_execution_horizon == 10
     assert args.vla_rtc_execution_horizon == 25
@@ -510,6 +542,41 @@ def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
     assert "--dataset.streaming_encoding=true" in argv
     assert "--policy_sync_to_teleop=true" in argv
     assert "--vla_ref=true" in argv
+
+
+def test_default_collect_resume_forwards_remaining_count_and_resume_flag():
+    parser = build_parser()
+    args = parser.parse_args([
+        "collect",
+        "--policy-path",
+        "/tmp/ac",
+        "--num-episodes",
+        "20",
+        "--only-critical",
+    ])
+    setup = SimpleNamespace(
+        followers=[{"port": "/tmp/follower-port"}],
+        left_cameras={},
+        right_cameras={},
+    )
+    paths = SimpleNamespace(
+        dataset_name="local/eval_vla_rlt_vla_221325",
+        dataset_root="/tmp/eval_vla_rlt_vla_221325",
+    )
+
+    argv = build_default_collect_record_argv(
+        args=args,
+        setup=setup,
+        paths=paths,
+        cal_dir="/tmp/cal",
+        teleop_argv=["--teleop.type=so101_leader"],
+        num_episodes=16,
+        resume=True,
+    )
+
+    assert "--dataset.num_episodes=16" in argv
+    assert "--resume=true" in argv
+    assert "--rlt.skip_prefix_recording=true" in argv
 
 
 def test_single_arm_setup_manifest_is_accepted_and_keeps_all_cameras(tmp_path):

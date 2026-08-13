@@ -851,9 +851,14 @@ def run_collect(args: argparse.Namespace) -> None:
     _validate_distinct_keys(**validation_keys)
     setup = load_robot_setup(args.setup_json)
     apply_manifest_reset_pose(args, setup.setup)
-    paths = resolve_run_paths(setup.setup, args.dataset_tag, "eval_vla_rlt_vla")
+    paths, episodes_to_record, resume = _resolve_full_recording_target(
+        args,
+        setup.setup,
+        "eval_vla_rlt_vla",
+    )
     configure_logging(paths.log_file, args.log_level)
-    remove_existing_dataset(paths.dataset_root)
+    if not resume:
+        remove_existing_dataset(paths.dataset_root)
     teleop_argv = build_teleop_argv(setup.leaders, args.no_teleop)
 
     if args.policy_path is None:
@@ -865,8 +870,21 @@ def run_collect(args: argparse.Namespace) -> None:
     with TemporaryDirectory(prefix="record-collect-") as cal_dir:
         stage_follower_calibrations(setup.followers, cal_dir)
         leader_cal_dir = stage_leader_calibrations(setup.leaders, teleop_argv)
-        sys.argv = build_default_collect_record_argv(args, setup, paths, cal_dir, teleop_argv)
-        print_collect_summary(args, paths)
+        sys.argv = build_default_collect_record_argv(
+            args,
+            setup,
+            paths,
+            cal_dir,
+            teleop_argv,
+            num_episodes=episodes_to_record,
+            resume=resume,
+        )
+        print_collect_summary(
+            args,
+            paths,
+            episodes_to_record=episodes_to_record,
+            resume=resume,
+        )
         if args.dry_run:
             print("\nDry run argv:")
             print(" ".join(sys.argv))
@@ -899,6 +917,9 @@ def build_default_collect_record_argv(
     paths,
     cal_dir: str,
     teleop_argv: list[str],
+    *,
+    num_episodes: int | None = None,
+    resume: bool = False,
 ) -> list[str]:
     argv = [
         "record_collect",
@@ -915,11 +936,12 @@ def build_default_collect_record_argv(
             dataset_name=paths.dataset_name,
             dataset_root=paths.dataset_root,
             task=args.task,
-            num_episodes=args.num_episodes,
+            num_episodes=args.num_episodes if num_episodes is None else num_episodes,
             episode_time_s=args.episode_time_s,
             fps=args.fps,
             vcodec=args.vcodec,
         ),
+        *(["--resume=true"] if resume else []),
         *build_reset_time_argv(args),
         *build_auto_reset_pose_argv(args),
         *_collect_rlt_phase_argv(args),
@@ -943,7 +965,13 @@ def build_default_collect_record_argv(
     return argv
 
 
-def print_collect_summary(args: argparse.Namespace, paths) -> None:
+def print_collect_summary(
+    args: argparse.Namespace,
+    paths,
+    *,
+    episodes_to_record: int | None = None,
+    resume: bool = False,
+) -> None:
     vla_horizon = args.vla_rtc_execution_horizon or args.rtc_execution_horizon
     print("\nDefault VLA-RLT-VLA collection")
     print(f"Dataset: {paths.dataset_name} -> {paths.dataset_root}")
@@ -951,6 +979,12 @@ def print_collect_summary(args: argparse.Namespace, paths) -> None:
     print(f"Policy: {args.policy_path}")
     print(f"VLA: {args.vla_path}")
     print(f"RL token: {args.rl_token_path}")
+    if resume:
+        print(
+            "Resume: "
+            f"target_total={args.num_episodes} "
+            f"episodes_to_record={episodes_to_record}"
+        )
     if args.auto_reset_pose:
         print(
             "Episode reset: "

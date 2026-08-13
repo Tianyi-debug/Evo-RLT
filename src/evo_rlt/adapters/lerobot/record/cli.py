@@ -120,6 +120,14 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
             "as the full-episode outcome key."
         ),
     )
+    parser.add_argument(
+        "--resume-dataset-root",
+        default=None,
+        help=(
+            "Append to an existing collect dataset directory. In this mode, "
+            "--num-episodes is the target total episode count, not the number to add."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", default=False)
 
 
