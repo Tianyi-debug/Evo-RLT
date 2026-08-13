@@ -95,6 +95,67 @@ def test_full_local_display_forwards_to_record_backend():
     assert build_display_data_argv(default_args.display_data) == []
 
 
+def test_collect_reset_pose_defaults_match_full():
+    parser = build_parser()
+    args = parser.parse_args([
+        "collect",
+        "--policy-path",
+        "/tmp/ac",
+    ])
+
+    assert args.auto_reset_pose is True
+    assert args.reset_pose_path is None
+    assert args.reset_pose_duration_s == pytest.approx(3.0)
+    assert args.reset_pose_recapture is False
+    assert args.reset_time_s is None
+
+
+def test_collect_reset_pose_and_environment_window_are_forwarded():
+    parser = build_parser()
+    args = parser.parse_args([
+        "collect",
+        "--policy-path",
+        "/tmp/ac",
+        "--reset-pose-path",
+        "/tmp/general_home.json",
+        "--reset-pose-duration-s",
+        "5",
+        "--reset-time-s",
+        "10",
+    ])
+
+    assert build_auto_reset_pose_argv(args) == [
+        "--auto_reset_pose=true",
+        "--reset_pose_duration_s=5.0",
+        "--reset_pose_recapture=false",
+        "--reset_pose_path=/tmp/general_home.json",
+    ]
+    assert runner.build_reset_time_argv(args) == ["--dataset.reset_time_s=10"]
+
+    setup = SimpleNamespace(
+        followers=[{"port": "/tmp/follower-port"}],
+        left_cameras={},
+        right_cameras={},
+    )
+    paths = SimpleNamespace(
+        dataset_name="local/reset-test",
+        dataset_root="/tmp/reset-test",
+    )
+    argv = build_default_collect_record_argv(
+        args=args,
+        setup=setup,
+        paths=paths,
+        cal_dir="/tmp/cal",
+        teleop_argv=["--teleop.type=so101_leader"],
+    )
+
+    assert "--dataset.reset_time_s=10" in argv
+    assert "--auto_reset_pose=true" in argv
+    assert "--reset_pose_duration_s=5.0" in argv
+    assert "--reset_pose_recapture=false" in argv
+    assert "--reset_pose_path=/tmp/general_home.json" in argv
+
+
 def test_full_resume_uses_target_total_episode_count(tmp_path):
     dataset_root = tmp_path / "teleop_full_161057"
     (dataset_root / "meta").mkdir(parents=True)

@@ -68,6 +68,16 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--task", default=DEFAULT_COLLECT_TASK)
     parser.add_argument("--num-episodes", type=int, default=5)
     parser.add_argument("--episode-time-s", type=int, default=3000)
+    parser.add_argument(
+        "--reset-time-s",
+        type=int,
+        default=None,
+        help=(
+            "Optional environment-reset window after the robot returns to its stored "
+            "episode reset pose. When omitted in --only-critical mode, the next episode "
+            "starts immediately after the automatic pose reset."
+        ),
+    )
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--setup-json", default=None)
     parser.add_argument("--dataset-tag", default=DEFAULT_COLLECT_DATASET_TAG)
@@ -80,6 +90,10 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rlt-toggle-key", default="r")
     parser.add_argument("--teleop-toggle-key", default="space")
     parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
+    parser.add_argument("--auto-reset-pose", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--reset-pose-path", default=None)
+    parser.add_argument("--reset-pose-duration-s", type=float, default=3.0)
+    parser.add_argument("--reset-pose-recapture", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument(
         "--deterministic",
         action=argparse.BooleanOptionalAction,

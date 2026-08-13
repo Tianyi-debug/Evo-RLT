@@ -850,6 +850,7 @@ def run_collect(args: argparse.Namespace) -> None:
         validation_keys["episode_outcome_key"] = episode_outcome_key
     _validate_distinct_keys(**validation_keys)
     setup = load_robot_setup(args.setup_json)
+    apply_manifest_reset_pose(args, setup.setup)
     paths = resolve_run_paths(setup.setup, args.dataset_tag, "eval_vla_rlt_vla")
     configure_logging(paths.log_file, args.log_level)
     remove_existing_dataset(paths.dataset_root)
@@ -877,7 +878,11 @@ def run_collect(args: argparse.Namespace) -> None:
                 args.double_tap_window_s if episode_outcome_key is not None else None
             ),
             intervention_toggle_key=args.teleop_toggle_key,
-            skip_policyless_reset_loop=args.only_critical and not args.start_with_teleop,
+            skip_policyless_reset_loop=(
+                args.only_critical
+                and not args.start_with_teleop
+                and args.reset_time_s is None
+            ),
             background_episode_video_encoding=True,
         )
         from evo_rlt.adapters.lerobot.record.backend import record
@@ -915,6 +920,8 @@ def build_default_collect_record_argv(
             fps=args.fps,
             vcodec=args.vcodec,
         ),
+        *build_reset_time_argv(args),
+        *build_auto_reset_pose_argv(args),
         *_collect_rlt_phase_argv(args),
         *build_rtc_argv(
             enabled=args.rtc,
@@ -944,6 +951,15 @@ def print_collect_summary(args: argparse.Namespace, paths) -> None:
     print(f"Policy: {args.policy_path}")
     print(f"VLA: {args.vla_path}")
     print(f"RL token: {args.rl_token_path}")
+    if args.auto_reset_pose:
+        print(
+            "Episode reset: "
+            f"pose={args.reset_pose_path or 'default cached pose'} "
+            f"duration={args.reset_pose_duration_s:.1f}s "
+            f"environment_window={args.reset_time_s or 0}s"
+        )
+    else:
+        print("Episode reset: automatic pose return disabled")
     print(
         "RTC: "
         f"enabled={args.rtc} rlt_horizon={args.rtc_execution_horizon} "
@@ -1082,9 +1098,10 @@ def build_segment_policy_argv(args: argparse.Namespace) -> list[str]:
 
 
 def build_reset_time_argv(args: argparse.Namespace) -> list[str]:
-    if args.reset_time_s is None:
+    reset_time_s = getattr(args, "reset_time_s", None)
+    if reset_time_s is None:
         return []
-    return [f"--dataset.reset_time_s={args.reset_time_s}"]
+    return [f"--dataset.reset_time_s={reset_time_s}"]
 
 
 def build_display_data_argv(display_data: bool) -> list[str]:

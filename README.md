@@ -476,9 +476,17 @@ r              enter RLT mode and start recording the critical segment
 r              save the segment as success, exit RLT mode, then end the episode
 r+r            save the segment as failure, exit RLT mode, then end the episode
 space          first press holds both arms; second enters teleop; third returns to policy
-left arrow     rerecord the current episode
+left arrow     return to the reset pose and rerecord the current episode
 Esc            stop data collection
 ```
+
+`evo-rlt-record collect` enables episode reset pose by default and honors a locked
+`reset_pose.path` from the setup manifest. Successful, failed, and rerecorded episodes all return
+the robot to that pose. Add `--reset-time-s <SECONDS>` to leave an environment-reset window after
+the arm returns (for example, `--reset-time-s 10`), and use
+`--reset-pose-duration-s <SECONDS>` to control the smooth return duration. The same
+`--[no-]auto-reset-pose`, `--reset-pose-path`, and `--[no-]reset-pose-recapture` controls available
+to `full` are also accepted by `collect`.
 
 `evo-rlt-record full` enables episode reset pose by default. After the robot connects, use the
 leader arm to move the follower to the episode start pose, then press Enter to capture it. Pressing
