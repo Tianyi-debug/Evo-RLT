@@ -165,6 +165,8 @@ def test_transition_cache_v2_semantic_builder_uses_exec_action_c_step_and_reward
     assert len(transitions) == 2
     assert torch.equal(transitions[0].exec_chunk, exec_chunks[0])
     assert torch.equal(transitions[0].ref_chunk, ref_chunks[0])
+    assert torch.equal(transitions[0].proposal_chunk, ref_chunks[0])
+    assert torch.equal(transitions[0].bc_target_chunk, ref_chunks[0])
     assert not torch.equal(transitions[0].exec_chunk, transitions[0].ref_chunk)
     assert torch.equal(transitions[0].next_state_vec, state_vecs[3])
     assert torch.equal(transitions[1].next_state_vec, state_vecs[4])
@@ -173,6 +175,69 @@ def test_transition_cache_v2_semantic_builder_uses_exec_action_c_step_and_reward
     assert torch.equal(transitions[0].reward_seq, torch.zeros(C))
     assert torch.equal(transitions[1].reward_seq, torch.tensor([0.0, 0.0, 1.0]))
     assert transitions[1].episode_id.item() == 7
+
+
+def test_transition_cache_v2_demo_executed_mode_uses_expert_bc_target():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    chunk_length = 2
+    frame_indices = [0, 1, 2]
+    ref_chunks = torch.full((3, chunk_length, 2), 0.25)
+    exec_chunks = torch.full((3, chunk_length, 2), -0.5)
+
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.randn(3, 4),
+        ref_chunks=ref_chunks,
+        exec_chunks=exec_chunks,
+        frame_indices=frame_indices,
+        episode_last_frame=2,
+        chunk_length=chunk_length,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=8,
+        demo_reference_mode="executed",
+    )
+
+    assert len(transitions) == 1
+    assert transitions[0].source.item() == module.TRANSITION_SOURCE_DEMO
+    assert torch.equal(transitions[0].proposal_chunk, ref_chunks[0])
+    assert torch.equal(transitions[0].ref_chunk, ref_chunks[0])
+    assert torch.equal(transitions[0].exec_chunk, exec_chunks[0])
+    assert torch.equal(transitions[0].bc_target_chunk, exec_chunks[0])
+
+
+def test_transition_cache_v2_demo_executed_mode_with_zero_provenance():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    chunk_length = 2
+    frame_indices = [0, 1, 2]
+    ref_chunks = torch.full((3, chunk_length, 2), 0.25)
+    exec_chunks = torch.full((3, chunk_length, 2), -0.5)
+    provenance = module.FrameProvenance(
+        is_intervention=torch.zeros(3),
+        collector_policy_id=torch.zeros(3),
+        intervention_stage=torch.zeros(3),
+    )
+
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.randn(3, 4),
+        ref_chunks=ref_chunks,
+        exec_chunks=exec_chunks,
+        frame_indices=frame_indices,
+        episode_last_frame=2,
+        chunk_length=chunk_length,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=9,
+        provenance=provenance,
+        demo_reference_mode="executed",
+    )
+
+    assert len(transitions) == 1
+    assert transitions[0].source.item() == module.TRANSITION_SOURCE_DEMO
+    assert transitions[0].intervention.item() == 0.0
+    assert torch.equal(transitions[0].proposal_chunk, ref_chunks[0])
+    assert torch.equal(transitions[0].bc_target_chunk, exec_chunks[0])
 
 
 def test_transition_cache_v2_semantic_builder_zero_reward_on_failure():
@@ -219,6 +284,7 @@ def test_transition_cache_v2_separates_human_bc_target_from_vla_proposal():
         episode_success=True,
         ep_id=60,
         provenance=provenance,
+        demo_reference_mode="executed",
     )
 
     assert len(transitions) == 3
@@ -290,6 +356,33 @@ def test_transition_cache_v2_summary_audits_residual_reachability():
 
     assert "human_vla_action_rmse=0.500000" in summary
     assert "human_target_outside_residual_bound_frac=1.000000" in summary
+
+
+def test_transition_cache_v2_summary_audits_demo_expert_reachability():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+    transition = module.ChunkTransition(
+        state_vec=torch.zeros(2),
+        exec_chunk=torch.full((1, 2), 0.5),
+        ref_chunk=torch.zeros(1, 2),
+        reward_seq=torch.zeros(1),
+        next_state_vec=torch.zeros(2),
+        next_ref_chunk=torch.zeros(1, 2),
+        done=torch.tensor(0.0),
+        intervention=torch.tensor(0.0),
+        actual_steps=torch.tensor(1),
+        source=torch.tensor(module.TRANSITION_SOURCE_DEMO),
+        proposal_chunk=torch.zeros(1, 2),
+        # The audit must compare expert execution with the proposal even when
+        # a legacy cache uses the proposal itself as the demo BC target.
+        bc_target_chunk=torch.zeros(1, 2),
+        next_proposal_chunk=torch.zeros(1, 2),
+    )
+
+    summary = module._transition_summary([transition], residual_delta_scale=0.1)
+
+    assert "demo_vla_action_rmse=0.500000" in summary
+    assert "demo_vla_action_abs_max=0.500000" in summary
+    assert "demo_target_outside_residual_bound_frac=1.000000" in summary
 
 
 def test_transition_cache_v2_drop_legacy_handoff_and_invalid_bootstrap():
@@ -562,6 +655,7 @@ def test_transition_cache_v2_uses_cli_chunk_length_for_frame_indices(monkeypatch
 
     def fake_encode_episode(**kwargs):
         captured["frame_indices"] = kwargs["frame_indices"]
+        captured["demo_reference_mode"] = kwargs["demo_reference_mode"]
         return []
 
     monkeypatch.setattr(module, "LeRobotDataset", FakeDataset)
@@ -598,6 +692,8 @@ def test_transition_cache_v2_uses_cli_chunk_length_for_frame_indices(monkeypatch
             "10",
             "--frame-stride",
             "2",
+            "--demo-reference-mode",
+            "executed",
             "--train-ratio",
             "1.0",
             "--device",
@@ -609,3 +705,4 @@ def test_transition_cache_v2_uses_cli_chunk_length_for_frame_indices(monkeypatch
 
     assert captured["delta_timestamps"]["action"] == [i / 25.0 for i in range(10)]
     assert captured["frame_indices"] == [0, 2, 3, 4, 6, 8, 10, 12, 13]
+    assert captured["demo_reference_mode"] == "executed"

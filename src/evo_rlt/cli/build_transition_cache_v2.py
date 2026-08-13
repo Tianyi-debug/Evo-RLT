@@ -121,6 +121,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--demo-reference-mode",
+        choices=["vla", "executed"],
+        default="vla",
+        help=(
+            "BC target stored for demonstration chunks. 'executed' supervises "
+            "the actor with the recorded expert action while preserving the "
+            "independently generated VLA proposal as actor input; 'vla' keeps "
+            "the legacy behavior."
+        ),
+    )
+    p.add_argument(
         "--human-reference-mode",
         choices=["executed", "vla"],
         default="executed",
@@ -456,6 +467,7 @@ def _encoded_episode_to_transitions(
     episode_success: bool,
     ep_id: int,
     provenance: FrameProvenance | None = None,
+    demo_reference_mode: str = "vla",
     human_reference_mode: str = "executed",
     legacy_handoff_policy: str = "majority",
 ) -> list[ChunkTransition]:
@@ -481,6 +493,9 @@ def _encoded_episode_to_transitions(
         is_critical=1.0,
     )
     if provenance is None:
+        if demo_reference_mode == "executed":
+            for transition in transitions:
+                transition.bc_target_chunk = transition.exec_chunk.clone()
         return transitions
 
     start_anchors = [
@@ -509,9 +524,14 @@ def _encoded_episode_to_transitions(
         # on the same independently generated VLA action. Only the BC target is
         # replaced on human chunks.
         transition.proposal_chunk = transition.ref_chunk
+        use_executed_target = (
+            source == TRANSITION_SOURCE_DEMO and demo_reference_mode == "executed"
+        ) or (
+            human_override and human_reference_mode == "executed"
+        )
         transition.bc_target_chunk = (
             transition.exec_chunk.clone()
-            if human_override and human_reference_mode == "executed"
+            if use_executed_target
             else transition.proposal_chunk
         )
         transition.next_proposal_chunk = transition.next_ref_chunk
@@ -562,6 +582,7 @@ def _encode_episode(
     frame_stride: int,
     episode_success: bool,
     provenance: FrameProvenance | None,
+    demo_reference_mode: str,
     human_reference_mode: str,
     legacy_handoff_policy: str,
 ) -> list[ChunkTransition]:
@@ -623,6 +644,7 @@ def _encode_episode(
         episode_success=episode_success,
         ep_id=ep_id,
         provenance=provenance,
+        demo_reference_mode=demo_reference_mode,
         human_reference_mode=human_reference_mode,
         legacy_handoff_policy=legacy_handoff_policy,
     )
@@ -641,9 +663,29 @@ def _transition_summary(
     human_delta_abs_max = 0.0
     human_outside_bound = 0
     human_samples = 0
+    demo_squared_error = 0.0
+    demo_elements = 0
+    demo_delta_abs_max = 0.0
+    demo_outside_bound = 0
+    demo_samples = 0
     for transition in transitions:
         source = int(transition.source.item())
         source_counts[source] = source_counts.get(source, 0) + 1
+        if source == TRANSITION_SOURCE_DEMO:
+            # Audit expert reachability independently of which demo BC target
+            # mode was selected, so legacy VLA-target caches do not report a
+            # misleading zero expert/VLA mismatch.
+            delta = (
+                transition.exec_chunk.clamp(-1.0, 1.0)
+                - transition.proposal_chunk.clamp(-1.0, 1.0)
+            )
+            demo_squared_error += float(delta.square().sum().item())
+            demo_elements += delta.numel()
+            demo_delta_abs_max = max(demo_delta_abs_max, float(delta.abs().max().item()))
+            demo_outside_bound += int(
+                float(delta.abs().max().item()) > residual_delta_scale + 1e-6
+            )
+            demo_samples += 1
         if source == TRANSITION_SOURCE_HUMAN_OVERRIDE:
             delta = (
                 transition.bc_target_chunk.clamp(-1.0, 1.0)
@@ -661,10 +703,15 @@ def _transition_summary(
                 success_terminal += 1
             else:
                 failure_terminal += 1
+    demo_rmse = (demo_squared_error / max(demo_elements, 1)) ** 0.5
     human_rmse = (human_squared_error / max(human_elements, 1)) ** 0.5
     return (
         f"sources={dict(sorted(source_counts.items()))} "
         f"terminal_success={success_terminal} terminal_failure={failure_terminal} "
+        f"demo_vla_action_rmse={demo_rmse:.6f} "
+        f"demo_vla_action_abs_max={demo_delta_abs_max:.6f} "
+        "demo_target_outside_residual_bound_frac="
+        f"{demo_outside_bound / max(demo_samples, 1):.6f} "
         f"human_vla_action_rmse={human_rmse:.6f} "
         f"human_vla_action_abs_max={human_delta_abs_max:.6f} "
         "human_target_outside_residual_bound_frac="
@@ -825,6 +872,7 @@ def main() -> None:
                     frame_stride=args.frame_stride,
                     episode_success=episode_success,
                     provenance=provenance,
+                    demo_reference_mode=args.demo_reference_mode,
                     human_reference_mode=args.human_reference_mode,
                     legacy_handoff_policy=args.legacy_handoff_policy,
                 )
