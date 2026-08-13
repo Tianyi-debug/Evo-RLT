@@ -27,6 +27,9 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.critic_bootstrap_mode == "none"
     assert config.critic_bootstrap_keep_prob == pytest.approx(0.8)
     assert config.diagnostics_jsonl_path is None
+    assert config.training_stage == "mixed_ac"
+    assert config.source_sampling_weights is None
+    assert config.training_lr == pytest.approx(3e-4)
 
 
 def test_per_action_dim_delta_scale_validates_action_shape():
@@ -155,3 +158,33 @@ def test_dynamic_bc_config_round_trips_through_pretrained_config(tmp_path):
     assert loaded.critic_bootstrap_keep_prob == pytest.approx(0.75)
     assert loaded.critic_bootstrap_seed == 77
     assert loaded.diagnostics_jsonl_path == "/tmp/evo-rlt-diagnostics.jsonl"
+
+
+def test_two_stage_training_config_validates_and_round_trips(tmp_path):
+    config = ChunkACPolicyConfig(
+        training_stage="human_bc",
+        source_sampling_weights=[0.0, 0.0, 0.0, 1.0],
+        source_sampling_seed=17,
+        training_lr=1e-4,
+    )
+    config.save_pretrained(tmp_path)
+
+    ChunkACPolicyConfig.ensure_registered()
+    loaded = PreTrainedConfig.from_pretrained(tmp_path)
+
+    assert loaded.training_stage == "human_bc"
+    assert loaded.source_sampling_weights == [0.0, 0.0, 0.0, 1.0]
+    assert loaded.source_sampling_seed == 17
+    assert loaded.training_lr == pytest.approx(1e-4)
+    assert loaded.get_optimizer_preset().lr == pytest.approx(1e-4)
+
+    with pytest.raises(ValueError, match="training_stage"):
+        ChunkACPolicyConfig(training_stage="critic_only")
+    with pytest.raises(ValueError, match="four values"):
+        ChunkACPolicyConfig(source_sampling_weights=[0.5, 0.5])
+    with pytest.raises(ValueError, match="non-negative"):
+        ChunkACPolicyConfig(source_sampling_weights=[0.0, 0.5, -0.1, 0.6])
+    with pytest.raises(ValueError, match="positive sum"):
+        ChunkACPolicyConfig(source_sampling_weights=[0.0, 0.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="training_lr"):
+        ChunkACPolicyConfig(training_lr=0.0)

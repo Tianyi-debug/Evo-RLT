@@ -89,6 +89,62 @@ def test_chunk_transition_dataset_injects_stable_cache_index_without_mutation(tm
     assert "cache_index" not in dataset._transitions[1]
 
 
+def _write_source_cache(tmp_path, sources: list[int]):
+    transitions = []
+    for index, source in enumerate(sources):
+        transitions.append(
+            {
+                "state_vec": torch.tensor([float(index)]),
+                "source": torch.tensor(source),
+            }
+        )
+    torch.save(transitions, tmp_path / "chunk_transitions_train.pt")
+
+
+def test_chunk_transition_dataset_human_bc_filters_source_3(tmp_path):
+    _write_source_cache(tmp_path, [1, 3, 1, 3, 3])
+
+    dataset = ChunkTransitionDataset(tmp_path, training_stage="human_bc")
+
+    assert len(dataset) == 3
+    assert dataset.source_counts == {1: 2, 3: 3}
+    assert dataset.sampling_source_counts == {3: 3}
+    assert [dataset[index]["cache_index"].item() for index in range(len(dataset))] == [1, 3, 4]
+    assert all(dataset[index]["source"].item() == 3 for index in range(len(dataset)))
+
+
+def test_chunk_transition_dataset_mixed_source_weights_are_exact_and_deterministic(tmp_path):
+    _write_source_cache(tmp_path, [1] * 8 + [2] * 2 + [3] * 2)
+
+    first = ChunkTransitionDataset(
+        tmp_path,
+        training_stage="mixed_ac",
+        source_sampling_weights=[0.0, 0.25, 0.25, 0.5],
+        source_sampling_seed=7,
+    )
+    second = ChunkTransitionDataset(
+        tmp_path,
+        training_stage="mixed_ac",
+        source_sampling_weights=[0.0, 0.25, 0.25, 0.5],
+        source_sampling_seed=7,
+    )
+
+    assert len(first) == 12
+    assert first.sampling_source_counts == {1: 3, 2: 3, 3: 6}
+    assert first._sample_indices == second._sample_indices
+    assert len(set(first._sample_indices)) < len(first._sample_indices)
+
+
+def test_chunk_transition_dataset_rejects_weight_for_absent_source(tmp_path):
+    _write_source_cache(tmp_path, [1, 1, 3, 3])
+
+    with pytest.raises(ValueError, match=r"absent cache sources: \[2\]"):
+        ChunkTransitionDataset(
+            tmp_path,
+            source_sampling_weights=[0.0, 0.25, 0.25, 0.5],
+        )
+
+
 def test_save_transition_cache_replaces_atomically(monkeypatch, tmp_path):
     final_path = tmp_path / "chunk_transitions_train.pt"
     tmp_cache_path = tmp_path / ".chunk_transitions_train.pt.tmp"

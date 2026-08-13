@@ -80,6 +80,17 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     actor_update_interval: int = 2
     target_q_clip: float = 100.0
 
+    # --- Offline training stage + source balancing ---
+    # ``human_bc`` performs actor-only residual behavior cloning on source=3
+    # transitions. ``mixed_ac`` keeps the regular TD3+BC actor-critic update.
+    training_stage: str = "mixed_ac"
+    # Replay-level source weights ordered as [demo, VLA, RL autonomous, human].
+    # The transition dataset realizes these weights with a deterministic virtual
+    # index map while keeping one epoch equal to the original cache length.
+    source_sampling_weights: list[float] | None = None
+    source_sampling_seed: int = 1000
+    training_lr: float = 3e-4
+
     # --- Shapes ---
     chunk_length: int = 10
     action_dim: int = 12
@@ -197,6 +208,27 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 f"critic_bootstrap_seed must be non-negative, got {self.critic_bootstrap_seed}"
             )
+        if self.training_stage not in ("mixed_ac", "human_bc"):
+            raise ValueError(
+                "training_stage must be 'mixed_ac' or 'human_bc', "
+                f"got {self.training_stage!r}"
+            )
+        if self.source_sampling_weights is not None:
+            if len(self.source_sampling_weights) != 4:
+                raise ValueError(
+                    "source_sampling_weights must contain four values ordered as "
+                    "[demo, VLA, RL autonomous, human]"
+                )
+            if any(weight < 0 for weight in self.source_sampling_weights):
+                raise ValueError("source_sampling_weights must be non-negative")
+            if sum(self.source_sampling_weights) <= 0:
+                raise ValueError("source_sampling_weights must have a positive sum")
+        if self.source_sampling_seed < 0:
+            raise ValueError(
+                f"source_sampling_seed must be non-negative, got {self.source_sampling_seed}"
+            )
+        if self.training_lr <= 0:
+            raise ValueError(f"training_lr must be positive, got {self.training_lr}")
         if (
             self.actor_bc_weight_mode == "disagreement"
             and self.actor_bc_uncertainty_tau_high
@@ -232,7 +264,7 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             )
 
     def get_optimizer_preset(self) -> OptimizerConfig:
-        return AdamWConfig(lr=3e-4, weight_decay=0.0, grad_clip_norm=1.0)
+        return AdamWConfig(lr=self.training_lr, weight_decay=0.0, grad_clip_norm=1.0)
 
     def get_scheduler_preset(self) -> LRSchedulerConfig | None:
         return None

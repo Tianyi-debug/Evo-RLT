@@ -63,6 +63,7 @@ def _head_only_policy(
     for parameter in policy.target_critic.parameters():
         parameter.requires_grad_(False)
     policy.register_buffer("_critic_step", torch.zeros((), dtype=torch.long))
+    policy.register_buffer("_human_bc_step", torch.zeros((), dtype=torch.long))
     policy.register_buffer("_actor_bc_tau_low_ema", torch.tensor(0.0))
     policy.register_buffer("_actor_bc_tau_high_ema", torch.tensor(0.2))
     policy._diagnostics_jsonl_initialized = False
@@ -117,6 +118,37 @@ def test_actor_only_backward_does_not_accumulate_critic_gradients():
 
     assert any(parameter.grad is not None for parameter in policy.actor.parameters())
     assert all(parameter.grad is None for parameter in policy.critic.parameters())
+
+
+def test_human_bc_forward_is_actor_only_and_rejects_non_human_batches():
+    policy = _head_only_policy()
+    policy.config.training_stage = "human_bc"
+    for parameter in policy.critic.parameters():
+        parameter.requires_grad_(False)
+    batch = _batch()
+    batch["source"] = torch.full((8,), 3)
+    batch["proposal_chunk"] = batch.pop("ref_chunk")
+    batch["bc_target_chunk"] = batch["proposal_chunk"] + 0.1
+    batch["next_proposal_chunk"] = batch.pop("next_ref_chunk")
+
+    loss, info = policy.forward(batch)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert info["human_bc_stage"] is True
+    assert info["human_bc_step"] == 1
+    assert policy._critic_step.item() == 0
+    assert info["human_sample_frac"] == pytest.approx(1.0)
+    assert info["source_3_frac"] == pytest.approx(1.0)
+    assert any(parameter.grad is not None for parameter in policy.actor.parameters())
+    assert all(parameter.grad is None for parameter in policy.critic.parameters())
+    optim_params = policy.get_optim_params()
+    assert len(optim_params) == 1
+    assert list(optim_params[0]["params"]) == list(policy.actor.parameters())
+
+    batch["source"][0] = 1
+    with pytest.raises(ValueError, match="accepts only source=3"):
+        policy.forward(batch)
 
 
 def test_ema_thresholds_are_used_before_batch_quantiles_update_them():

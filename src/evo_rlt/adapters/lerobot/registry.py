@@ -75,7 +75,18 @@ def register() -> None:
         if cache_dir is not None and (cache_dir / "chunk_transitions_train.pt").exists():
             from evo_rlt.adapters.lerobot.policies.dataset_rlt_ac import ChunkTransitionDataset
 
-            return ChunkTransitionDataset(cache_dir, split="train")
+            policy_cfg = getattr(cfg, "policy", None)
+            return ChunkTransitionDataset(
+                cache_dir,
+                split="train",
+                training_stage=getattr(policy_cfg, "training_stage", "mixed_ac"),
+                source_sampling_weights=getattr(
+                    policy_cfg,
+                    "source_sampling_weights",
+                    None,
+                ),
+                source_sampling_seed=getattr(policy_cfg, "source_sampling_seed", 1000),
+            )
         return original_make_dataset(cfg)
 
     factory.get_policy_class = get_policy_class

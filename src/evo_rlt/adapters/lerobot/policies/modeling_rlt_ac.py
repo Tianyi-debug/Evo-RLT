@@ -156,9 +156,13 @@ class ChunkACPolicy(PreTrainedPolicy):
         for p in self.target_critic.parameters():
             p.requires_grad = False
         self.target_critic.eval()
+        if config.training_stage == "human_bc":
+            for p in self.critic.parameters():
+                p.requires_grad = False
 
         # Persistent step counter — survives ckpt save/load.
         self.register_buffer("_critic_step", torch.zeros((), dtype=torch.long), persistent=True)
+        self.register_buffer("_human_bc_step", torch.zeros((), dtype=torch.long), persistent=True)
         self.register_buffer(
             "_actor_bc_tau_low_ema",
             torch.tensor(float(config.actor_bc_uncertainty_tau_low)),
@@ -330,6 +334,9 @@ class ChunkACPolicy(PreTrainedPolicy):
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict | None]:
         tx = self._coerce_batch(batch)
 
+        if getattr(self.config, "training_stage", "mixed_ac") == "human_bc":
+            return self._forward_human_bc(tx)
+
         c_loss, critic_info = critic_loss_with_diagnostics(
             self.critic,
             self.target_critic,
@@ -377,6 +384,51 @@ class ChunkACPolicy(PreTrainedPolicy):
         }
         info = self._finalize_diagnostics(raw_info)
         return c_loss, info
+
+    def _forward_human_bc(self, tx: dict[str, Tensor]) -> tuple[Tensor, dict[str, Any]]:
+        source = tx.get("source")
+        if source is None:
+            raise KeyError("human_bc requires the transition cache to contain source")
+        source = source.reshape(-1)
+        if not bool(torch.all(source == 3)):
+            observed = sorted(int(value) for value in source.detach().unique().cpu().tolist())
+            raise ValueError(f"human_bc accepts only source=3 batches, got sources={observed}")
+
+        proposal = tx["proposal_chunk_flat"]
+        bc_target = tx["bc_target_chunk_flat"]
+        mu, _ = self.actor.forward(tx["state_vec"], proposal, training=True)
+        if getattr(self.actor, "action_residual", False):
+            bc_target = bc_target.clamp(-1.0, 1.0)
+        bc_per_sample = (mu - bc_target).square().sum(dim=-1)
+        loss = bc_per_sample.mean()
+        self._human_bc_step += 1
+
+        executable_proposal = proposal.detach().clamp(-1.0, 1.0)
+        human_delta = bc_target.detach() - executable_proposal
+        if getattr(self.actor, "action_residual", False):
+            residual_bound = self.actor.residual_delta_bound(human_delta)
+            outside = (human_delta.abs() > residual_bound + 1e-6).any(dim=-1)
+            outside_frac = outside.float().mean()
+        else:
+            outside_frac = loss.detach().new_zeros(())
+        raw_info = {
+            "loss_total_step": loss.detach(),
+            "loss_actor": loss.detach(),
+            "loss_actor_bc_raw": loss.detach(),
+            "actor_bc_target_rmse": (mu.detach() - bc_target.detach()).square().mean().sqrt(),
+            "actor_ref_rmse": (mu.detach() - executable_proposal).square().mean().sqrt(),
+            "human_vla_action_rmse": human_delta.square().mean().sqrt(),
+            "human_target_outside_residual_bound_frac": outside_frac,
+            "human_sample_frac": loss.detach().new_ones(()),
+            "source_0_frac": loss.detach().new_zeros(()),
+            "source_1_frac": loss.detach().new_zeros(()),
+            "source_2_frac": loss.detach().new_zeros(()),
+            "source_3_frac": loss.detach().new_ones(()),
+            "human_bc_step": self._human_bc_step.detach().clone(),
+            "actor_update": True,
+            "human_bc_stage": True,
+        }
+        return loss, self._finalize_diagnostics(raw_info)
 
     @staticmethod
     def _scalarize_diagnostics(info: dict[str, Any]) -> dict[str, float | int | bool]:
@@ -924,6 +976,8 @@ class ChunkACPolicy(PreTrainedPolicy):
         return self.modifier.pop_step_metadata()
 
     def get_optim_params(self) -> list:
+        if getattr(self.config, "training_stage", "mixed_ac") == "human_bc":
+            return [{"params": list(self.actor.parameters())}]
         return [
             {"params": list(self.actor.parameters())},
             {"params": list(self.critic.parameters())},
