@@ -69,6 +69,48 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--task-instruction", default="screw")
     p.add_argument("--chunk-length", type=int, default=10)
     p.add_argument("--frame-stride", type=int, default=2)
+    p.add_argument(
+        "--trim-leading-idle",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Automatically trim each episode's leading idle frames before building "
+            "frame indices. Disabled by default, so existing commands are unchanged."
+        ),
+    )
+    p.add_argument(
+        "--trim-leading-idle-threshold",
+        type=float,
+        default=1.0,
+        help=(
+            "Motion-onset threshold: L2 displacement from the episode's first action "
+            "over the selected action dimensions, in raw dataset action units."
+        ),
+    )
+    p.add_argument(
+        "--trim-leading-idle-hold-frames",
+        type=int,
+        default=5,
+        help="Number of consecutive above-threshold frames required to confirm motion onset.",
+    )
+    p.add_argument(
+        "--trim-leading-idle-pre-roll-frames",
+        type=int,
+        default=None,
+        help=(
+            "Frames retained immediately before detected motion onset. Defaults to "
+            "--chunk-length."
+        ),
+    )
+    p.add_argument(
+        "--trim-leading-idle-action-dims",
+        type=int,
+        default=5,
+        help=(
+            "Number of leading action dimensions used for onset detection. The default "
+            "excludes the sixth SO101 gripper dimension."
+        ),
+    )
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--num-workers", type=int, default=2)
     p.add_argument("--train-ratio", type=float, default=0.9)
@@ -194,6 +236,96 @@ def _dataset_scalar_column(dataset: LeRobotDataset, key: str) -> list | None:
     if key not in getattr(hf_dataset, "column_names", []):
         return None
     return [_scalar_value(value) for value in hf_dataset[key]]
+
+
+def _episode_action_tensor(
+    dataset: LeRobotDataset,
+    episode_start: int,
+    episode_stop: int,
+) -> Tensor:
+    """Read raw per-frame actions for one episode without decoding observations."""
+    hf_dataset = getattr(dataset, "hf_dataset", None)
+    if hf_dataset is None or "action" not in getattr(hf_dataset, "column_names", []):
+        raise KeyError(
+            "--trim-leading-idle requires an 'action' column in dataset.hf_dataset"
+        )
+    values = hf_dataset["action"][episode_start:episode_stop]
+    if len(values) == 0:
+        raise ValueError(
+            f"Cannot detect motion onset in empty episode range [{episode_start}, {episode_stop})"
+        )
+    actions = torch.stack(
+        [torch.as_tensor(value, dtype=torch.float32).reshape(-1) for value in values]
+    )
+    if not torch.isfinite(actions).all():
+        raise ValueError(
+            f"Non-finite action found in episode range [{episode_start}, {episode_stop})"
+        )
+    return actions
+
+
+def _find_leading_motion_onset(
+    actions: Tensor,
+    *,
+    threshold: float,
+    hold_frames: int,
+    action_dims: int,
+) -> int | None:
+    """Return the first relative frame of sustained motion away from frame zero."""
+    if actions.ndim != 2:
+        raise ValueError(f"Expected actions with shape [frames, dims], got {tuple(actions.shape)}")
+    if threshold <= 0:
+        raise ValueError("--trim-leading-idle-threshold must be > 0")
+    if hold_frames <= 0:
+        raise ValueError("--trim-leading-idle-hold-frames must be > 0")
+    if action_dims <= 0 or action_dims > actions.shape[1]:
+        raise ValueError(
+            "--trim-leading-idle-action-dims must be in "
+            f"[1, {actions.shape[1]}], got {action_dims}"
+        )
+    if actions.shape[0] < hold_frames:
+        return None
+
+    displacement = torch.linalg.vector_norm(
+        actions[:, :action_dims] - actions[0, :action_dims],
+        dim=1,
+    )
+    sustained = (displacement > threshold).unfold(0, hold_frames, 1).all(dim=1)
+    onset_candidates = torch.nonzero(sustained, as_tuple=False).reshape(-1)
+    if onset_candidates.numel() == 0:
+        return None
+    return int(onset_candidates[0].item())
+
+
+def _trimmed_episode_start(
+    dataset: LeRobotDataset,
+    *,
+    episode_id: int,
+    episode_start: int,
+    episode_stop: int,
+    threshold: float,
+    hold_frames: int,
+    pre_roll_frames: int,
+    action_dims: int,
+) -> tuple[int, int]:
+    """Return absolute (trimmed start, detected onset) for one episode."""
+    if pre_roll_frames < 0:
+        raise ValueError("--trim-leading-idle-pre-roll-frames must be >= 0")
+    actions = _episode_action_tensor(dataset, episode_start, episode_stop)
+    onset = _find_leading_motion_onset(
+        actions,
+        threshold=threshold,
+        hold_frames=hold_frames,
+        action_dims=action_dims,
+    )
+    if onset is None:
+        raise ValueError(
+            f"Episode {episode_id} has no sustained motion onset: threshold={threshold}, "
+            f"hold_frames={hold_frames}, action_dims={action_dims}. Inspect or exclude this "
+            "episode instead of silently retaining an all-idle prefix."
+        )
+    trimmed_start = episode_start + max(0, onset - pre_roll_frames)
+    return trimmed_start, episode_start + onset
 
 
 def _load_frame_provenance(
@@ -780,6 +912,27 @@ def main() -> None:
         tolerance_s=args.tolerance_s,
         video_backend=args.video_backend,
     )
+    trim_pre_roll_frames = (
+        args.chunk_length
+        if args.trim_leading_idle_pre_roll_frames is None
+        else args.trim_leading_idle_pre_roll_frames
+    )
+    if args.trim_leading_idle:
+        if args.trim_leading_idle_threshold <= 0:
+            raise ValueError("--trim-leading-idle-threshold must be > 0")
+        if args.trim_leading_idle_hold_frames <= 0:
+            raise ValueError("--trim-leading-idle-hold-frames must be > 0")
+        if trim_pre_roll_frames < 0:
+            raise ValueError("--trim-leading-idle-pre-roll-frames must be >= 0")
+        if args.trim_leading_idle_action_dims <= 0:
+            raise ValueError("--trim-leading-idle-action-dims must be > 0")
+        _log(
+            "leading-idle trim enabled: "
+            f"threshold={args.trim_leading_idle_threshold} "
+            f"hold_frames={args.trim_leading_idle_hold_frames} "
+            f"pre_roll_frames={trim_pre_roll_frames} "
+            f"action_dims={args.trim_leading_idle_action_dims}"
+        )
     provenance = _load_frame_provenance(dataset, args.provenance_mode)
     n_episodes = dataset.num_episodes
     if args.max_episodes is not None:
@@ -836,12 +989,30 @@ def main() -> None:
         t_start = time.time()
         for split_name, eps in (("train", train_eps), ("val", val_eps)):
             all_tx: list[ChunkTransition] = []
+            trimmed_episode_count = 0
+            trimmed_frame_count = 0
             for k, ep_id in enumerate(eps):
                 ep_meta = dataset.meta.episodes
                 ep_from = int(ep_meta["dataset_from_index"][ep_id])
                 ep_to = int(ep_meta["dataset_to_index"][ep_id])
+                cache_from = ep_from
+                motion_onset = None
+                if args.trim_leading_idle:
+                    cache_from, motion_onset = _trimmed_episode_start(
+                        dataset,
+                        episode_id=ep_id,
+                        episode_start=ep_from,
+                        episode_stop=ep_to,
+                        threshold=args.trim_leading_idle_threshold,
+                        hold_frames=args.trim_leading_idle_hold_frames,
+                        pre_roll_frames=trim_pre_roll_frames,
+                        action_dims=args.trim_leading_idle_action_dims,
+                    )
+                    trimmed_frames = cache_from - ep_from
+                    trimmed_episode_count += int(trimmed_frames > 0)
+                    trimmed_frame_count += trimmed_frames
                 frame_indices = build_overlap_frame_indices(
-                    episode_start=ep_from,
+                    episode_start=cache_from,
                     episode_stop=ep_to,
                     chunk_length=args.chunk_length,
                     stride=args.frame_stride,
@@ -851,7 +1022,17 @@ def main() -> None:
                     ep_id,
                     args.missing_episode_success,
                 )
-                _log(f"  [{split_name}] ep {k+1}/{len(eps)} id={ep_id} frames={ep_to-ep_from} chunks={len(frame_indices)} (total transitions={len(all_tx)}, wall={time.time()-t_start:.0f}s)")
+                trim_details = ""
+                if motion_onset is not None:
+                    trim_details = (
+                        f" raw_frames={ep_to-ep_from} trimmed={cache_from-ep_from} "
+                        f"onset_rel={motion_onset-ep_from}"
+                    )
+                _log(
+                    f"  [{split_name}] ep {k+1}/{len(eps)} id={ep_id} "
+                    f"frames={ep_to-cache_from}{trim_details} chunks={len(frame_indices)} "
+                    f"(total transitions={len(all_tx)}, wall={time.time()-t_start:.0f}s)"
+                )
                 ep_tx = _encode_episode(
                     vla=vla,
                     rl_token=rl_token,
@@ -894,6 +1075,12 @@ def main() -> None:
                 f"  [{split_name}] final "
                 f"{_transition_summary(all_tx, args.residual_delta_scale)}"
             )
+            if args.trim_leading_idle:
+                _log(
+                    f"  [{split_name}] leading-idle trim summary: "
+                    f"episodes_trimmed={trimmed_episode_count}/{len(eps)} "
+                    f"frames_trimmed={trimmed_frame_count}"
+                )
     finally:
         capture.detach()
 

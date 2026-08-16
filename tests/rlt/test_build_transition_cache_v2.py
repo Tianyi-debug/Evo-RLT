@@ -594,6 +594,87 @@ def test_transition_cache_v2_rejects_missing_episode_success_by_default(monkeypa
     args = module.parse_args()
 
     assert args.missing_episode_success == "error"
+    assert args.trim_leading_idle is False
+    assert args.trim_leading_idle_threshold == pytest.approx(1.0)
+    assert args.trim_leading_idle_hold_frames == 5
+    assert args.trim_leading_idle_pre_roll_frames is None
+    assert args.trim_leading_idle_action_dims == 5
+
+
+def test_transition_cache_v2_detects_sustained_motion_and_ignores_gripper_spike():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    actions = torch.zeros(14, 6)
+    actions[2, 0] = 3.0  # One-frame arm spike must not count as sustained motion.
+    actions[5:, 5] = 20.0  # Gripper is outside the default five onset dimensions.
+    actions[8:, 1] = 2.0
+
+    onset = module._find_leading_motion_onset(
+        actions,
+        threshold=1.0,
+        hold_frames=3,
+        action_dims=5,
+    )
+
+    assert onset == 8
+
+
+def test_transition_cache_v2_trims_to_motion_onset_minus_pre_roll():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    all_actions = [torch.zeros(6) for _ in range(120)]
+    for frame in range(108, 120):
+        all_actions[frame][0] = 2.0
+
+    class FakeHFDataset:
+        column_names = ["action"]
+
+        def __getitem__(self, key):
+            if key != "action":
+                raise KeyError(key)
+            return all_actions
+
+    dataset = SimpleNamespace(hf_dataset=FakeHFDataset())
+
+    trimmed_start, onset = module._trimmed_episode_start(
+        dataset,
+        episode_id=7,
+        episode_start=100,
+        episode_stop=120,
+        threshold=1.0,
+        hold_frames=3,
+        pre_roll_frames=4,
+        action_dims=5,
+    )
+
+    assert onset == 108
+    assert trimmed_start == 104
+
+
+def test_transition_cache_v2_rejects_episode_without_sustained_motion():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    class FakeHFDataset:
+        column_names = ["action"]
+
+        def __getitem__(self, key):
+            if key != "action":
+                raise KeyError(key)
+            return [torch.zeros(6) for _ in range(12)]
+
+    dataset = SimpleNamespace(hf_dataset=FakeHFDataset())
+
+    with pytest.raises(ValueError, match="Episode 3 has no sustained motion onset"):
+        module._trimmed_episode_start(
+            dataset,
+            episode_id=3,
+            episode_start=0,
+            episode_stop=12,
+            threshold=1.0,
+            hold_frames=5,
+            pre_roll_frames=10,
+            action_dims=5,
+        )
 
 
 def test_transition_cache_v2_uses_cli_chunk_length_for_frame_indices(monkeypatch, tmp_path):
