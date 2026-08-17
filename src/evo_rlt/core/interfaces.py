@@ -30,6 +30,8 @@ SOURCE = "source"
 EPISODE_ID = "episode_id"
 IS_CRITICAL = "is_critical"
 INTERVENTION = "intervention"
+CRITIC_MASK = "critic_mask"
+ACTOR_Q_MASK = "actor_q_mask"
 
 
 @dataclass
@@ -77,6 +79,12 @@ class ChunkTransition:
     proposal_chunk: torch.Tensor | None = None
     bc_target_chunk: torch.Tensor | None = None
     next_proposal_chunk: torch.Tensor | None = None
+    # Per-transition training semantics.  Old caches default to the legacy
+    # behavior where every transition participates in critic and actor-Q
+    # updates.
+    critic_mask: torch.Tensor = field(default_factory=lambda: torch.tensor(1.0))
+    actor_q_mask: torch.Tensor = field(default_factory=lambda: torch.tensor(1.0))
+    intervention_reason: torch.Tensor = field(default_factory=lambda: torch.tensor(0))
 
     def __post_init__(self) -> None:
         # Old caches only contain ref_chunk. They remain loadable, but a human

@@ -4,6 +4,7 @@ from collections import defaultdict
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from evo_rlt.adapters.lerobot.record import loop
 from evo_rlt.adapters.lerobot.record.loop import _extract_hold_action
@@ -26,7 +27,18 @@ def test_extract_hold_action_uses_observation_and_complete_fallback():
     }
 
 
-def test_two_stage_intervention_holds_then_teleops_then_releases(monkeypatch):
+@pytest.mark.parametrize(
+    ("event_name", "expected_reason"),
+    [
+        ("toggle_intervention", loop.INTERVENTION_REASON_CORRECTIVE),
+        ("toggle_proactive_intervention", loop.INTERVENTION_REASON_PROACTIVE),
+    ],
+)
+def test_two_stage_intervention_holds_then_teleops_then_releases(
+    monkeypatch,
+    event_name,
+    expected_reason,
+):
     class IdentityPipeline:
         def __call__(self, value):
             return value[0] if isinstance(value, tuple) else value
@@ -74,6 +86,7 @@ def test_two_stage_intervention_holds_then_teleops_then_releases(monkeypatch):
             "complementary_info.is_intervention": {},
             "complementary_info.state": {},
             "complementary_info.intervention_stage": {},
+            "complementary_info.intervention_reason": {},
             "complementary_info.collector_policy_id": {},
             "complementary_info.phase": {},
         }
@@ -87,7 +100,7 @@ def test_two_stage_intervention_holds_then_teleops_then_releases(monkeypatch):
             self.frames.append(frame)
             self.episode_buffer["size"] += 1
             if len(self.frames) < 3:
-                self.events["toggle_intervention"] = True
+                self.events[event_name] = True
             else:
                 self.events["exit_early"] = True
 
@@ -115,7 +128,8 @@ def test_two_stage_intervention_holds_then_teleops_then_releases(monkeypatch):
     )
 
     teleop = FakeTeleop()
-    events = defaultdict(bool, toggle_intervention=True)
+    events = defaultdict(bool)
+    events[event_name] = True
     dataset = FakeDataset(events)
     robot = FakeRobot()
     sync_executor = FakeSyncExecutor()
@@ -154,3 +168,7 @@ def test_two_stage_intervention_holds_then_teleops_then_releases(monkeypatch):
         loop.INTERVENTION_STAGE_TELEOP,
         loop.INTERVENTION_STAGE_RELEASE,
     ]
+    assert [
+        frame["complementary_info.intervention_reason"].item()
+        for frame in dataset.frames
+    ] == [expected_reason, expected_reason, expected_reason]

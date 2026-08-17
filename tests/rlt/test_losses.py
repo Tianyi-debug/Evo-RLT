@@ -91,6 +91,67 @@ def test_critic_loss_scalar(actor, critic, target_critic, batch):
     assert not torch.isnan(loss)
 
 
+def test_critic_mask_excludes_assisted_samples_from_td_loss():
+    class StubActor:
+        def forward(self, state_vec, ref_chunk, training=False):
+            return torch.zeros_like(ref_chunk), torch.zeros_like(ref_chunk)
+
+    class StubTarget:
+        def min_q(self, state_vec, action):
+            return torch.zeros(state_vec.shape[0], 1)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            return state_vec[:, :1], state_vec[:, 1:2]
+
+    masked_batch = {
+        "state_vec": torch.tensor([[2.0, 3.0], [100.0, 200.0]]),
+        "exec_chunk_flat": torch.zeros(2, 1),
+        "ref_chunk_flat": torch.zeros(2, 1),
+        "reward_seq": torch.zeros(2, 1),
+        "next_state_vec": torch.zeros(2, 2),
+        "next_ref_flat": torch.zeros(2, 1),
+        "done": torch.ones(2),
+        "actual_steps": torch.ones(2, dtype=torch.long),
+        "critic_mask": torch.tensor([1.0, 0.0]),
+    }
+
+    loss, diagnostics = critic_loss_with_diagnostics(
+        StubCritic(), StubTarget(), StubActor(), masked_batch, gamma=0.99, C=1
+    )
+
+    assert loss.item() == pytest.approx(2.0**2 + 3.0**2)
+    assert diagnostics["critic_valid_frac"].item() == pytest.approx(0.5)
+
+
+def test_actor_q_mask_keeps_human_bc_but_excludes_human_q():
+    class StubActor:
+        action_residual = False
+
+        def forward(self, state_vec, proposal, training=False):
+            return torch.zeros_like(proposal), torch.zeros_like(proposal)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            q = state_vec[:, :1]
+            return q, q
+
+    actor_batch = {
+        "state_vec": torch.tensor([[2.0], [100.0]]),
+        "ref_chunk_flat": torch.zeros(2, 1),
+        "bc_target_chunk_flat": torch.tensor([[0.0], [1.0]]),
+        "actor_q_mask": torch.tensor([1.0, 0.0]),
+    }
+
+    loss, diagnostics = actor_loss_with_diagnostics(
+        StubActor(), StubCritic(), actor_batch, beta=1.0
+    )
+
+    # Q uses only sample 0 (-2); BC still averages both samples ((0 + 1) / 2).
+    assert loss.item() == pytest.approx(-1.5)
+    assert diagnostics["actor_q_valid_frac"].item() == pytest.approx(0.5)
+
+
 def test_bootstrap_none_is_exactly_the_legacy_default(actor, critic, target_critic, batch):
     default_loss, default_info = critic_loss_with_diagnostics(
         critic,

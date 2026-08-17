@@ -42,6 +42,18 @@ INTERVENTION_STAGE_HOLD = 1.0
 INTERVENTION_STAGE_TELEOP = 2.0
 INTERVENTION_STAGE_RELEASE = 3.0
 
+# Why the human took over.  This is deliberately separate from
+# ``intervention_stage``: stage describes the mechanical handoff state, while
+# reason controls offline credit assignment.
+INTERVENTION_REASON_NONE = 0.0
+INTERVENTION_REASON_CORRECTIVE = 1.0
+INTERVENTION_REASON_PROACTIVE = 2.0
+INTERVENTION_REASON_CODEBOOK = {
+    "0": "none",
+    "1": "corrective",
+    "2": "proactive",
+}
+
 # Unified collector policy codes stored in `complementary_info.collector_policy_id`.
 COLLECTOR_HUMAN = 0
 COLLECTOR_POLICY = 1

@@ -33,6 +33,9 @@ from evo_rlt.adapters.lerobot.offline_dataset import (
     save_transition_cache,
 )
 from evo_rlt.adapters.lerobot.record.annotations import (
+    INTERVENTION_REASON_CORRECTIVE,
+    INTERVENTION_REASON_NONE,
+    INTERVENTION_REASON_PROACTIVE,
     INTERVENTION_STAGE_POLICY,
     INTERVENTION_STAGE_TELEOP,
 )
@@ -194,6 +197,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--missing-intervention-reason",
+        choices=["legacy", "error", "corrective", "proactive"],
+        default="legacy",
+        help=(
+            "How to handle mixed datasets without the frame-level "
+            "complementary_info.intervention_reason field. 'legacy' preserves "
+            "the old credit semantics; 'error' requires explicit labels; "
+            "'corrective' or 'proactive' assigns that reason to every handoff."
+        ),
+    )
+    p.add_argument(
         "--residual-delta-scale",
         type=float,
         default=0.1,
@@ -210,6 +224,7 @@ class FrameProvenance:
     is_intervention: Tensor
     collector_policy_id: Tensor
     intervention_stage: Tensor | None = None
+    intervention_reason: Tensor | None = None
 
 
 def _log(msg: str) -> None:
@@ -331,6 +346,7 @@ def _trimmed_episode_start(
 def _load_frame_provenance(
     dataset: LeRobotDataset,
     mode: str,
+    missing_intervention_reason: str = "legacy",
 ) -> FrameProvenance | None:
     if mode == "demo":
         return None
@@ -339,6 +355,10 @@ def _load_frame_provenance(
     intervention_stage = _dataset_scalar_column(
         dataset,
         "complementary_info.intervention_stage",
+    )
+    intervention_reason = _dataset_scalar_column(
+        dataset,
+        "complementary_info.intervention_reason",
     )
     if intervention is None or collector is None:
         if mode == "mixed":
@@ -370,16 +390,79 @@ def _load_frame_provenance(
             intervention_stage,
             dtype=torch.float32,
         ).reshape(-1)
+    intervention_reason_t = None
+    handoff_mask = intervention_t > 0.5
+    if intervention_stage_t is not None:
+        handoff_mask = handoff_mask | (intervention_stage_t != INTERVENTION_STAGE_POLICY)
+    if intervention_reason is not None:
+        if len(intervention_reason) != len(dataset):
+            raise ValueError(
+                "Intervention-reason column must align with dataset frames: "
+                f"reason={len(intervention_reason)} dataset={len(dataset)}"
+            )
+        reason_float = torch.as_tensor(intervention_reason, dtype=torch.float32).reshape(-1)
+        reason_int = reason_float.round().to(torch.long)
+        if not torch.allclose(reason_float, reason_int.to(torch.float32)):
+            raise ValueError("complementary_info.intervention_reason contains non-integer values")
+        allowed = {
+            int(INTERVENTION_REASON_NONE),
+            int(INTERVENTION_REASON_CORRECTIVE),
+            int(INTERVENTION_REASON_PROACTIVE),
+        }
+        observed = set(int(value) for value in reason_int.unique().tolist())
+        if not observed.issubset(allowed):
+            raise ValueError(
+                "complementary_info.intervention_reason contains unsupported codes: "
+                f"{sorted(observed - allowed)}"
+            )
+        missing_mask = handoff_mask & (reason_int == int(INTERVENTION_REASON_NONE))
+        if bool(missing_mask.any()):
+            if missing_intervention_reason == "error":
+                raise ValueError(
+                    "Intervention frames are missing an intervention_reason label; "
+                    "relabel the dataset or choose an explicit fallback."
+                )
+            if missing_intervention_reason == "legacy":
+                _log(
+                    "intervention_reason is incomplete; falling back to legacy credit semantics"
+                )
+                reason_int = None
+            else:
+                fill = (
+                    int(INTERVENTION_REASON_CORRECTIVE)
+                    if missing_intervention_reason == "corrective"
+                    else int(INTERVENTION_REASON_PROACTIVE)
+                )
+                reason_int[missing_mask] = fill
+        if reason_int is not None:
+            intervention_reason_t = reason_int
+    elif bool(handoff_mask.any()):
+        if missing_intervention_reason == "error":
+            raise KeyError(
+                "Mixed provenance contains interventions but no "
+                "complementary_info.intervention_reason column"
+            )
+        if missing_intervention_reason in {"corrective", "proactive"}:
+            fill = (
+                int(INTERVENTION_REASON_CORRECTIVE)
+                if missing_intervention_reason == "corrective"
+                else int(INTERVENTION_REASON_PROACTIVE)
+            )
+            intervention_reason_t = torch.zeros(len(dataset), dtype=torch.long)
+            intervention_reason_t[handoff_mask] = fill
     _log(
         "collector provenance: "
         f"frames={len(dataset)} intervention_frac={float((intervention_t > 0.5).float().mean()):.3f} "
         f"collector_ids={sorted(int(value) for value in collector_t.unique().tolist())} "
         f"intervention_stage={'present' if intervention_stage_t is not None else 'legacy-absent'}"
+        f" intervention_reason="
+        f"{'present' if intervention_reason_t is not None else 'legacy-absent'}"
     )
     return FrameProvenance(
         is_intervention=intervention_t,
         collector_policy_id=collector_t,
         intervention_stage=intervention_stage_t,
+        intervention_reason=intervention_reason_t,
     )
 
 
@@ -443,6 +526,81 @@ def _chunk_provenance(
         2: TRANSITION_SOURCE_RL_AUTONOMOUS,
     }.get(collector_id, TRANSITION_SOURCE_RL_AUTONOMOUS)
     return source, False, True
+
+
+def _intervention_reason_for_chunk(
+    provenance: FrameProvenance,
+    start_frame: int,
+    chunk_length: int,
+) -> int:
+    if provenance.intervention_reason is None:
+        return int(INTERVENTION_REASON_NONE)
+    values = provenance.intervention_reason[start_frame : start_frame + chunk_length]
+    nonzero = values[values != int(INTERVENTION_REASON_NONE)].unique()
+    if nonzero.numel() != 1:
+        raise ValueError(
+            f"Intervention chunk at frame {start_frame} must have exactly one non-zero "
+            f"reason, got {nonzero.tolist()}"
+        )
+    return int(nonzero.item())
+
+
+def _policy_run_credit_semantics(
+    provenance: FrameProvenance,
+    episode_start: int,
+    episode_stop: int,
+) -> tuple[dict[int, int], dict[int, int]]:
+    """Map policy frames to the following takeover's run id and reason.
+
+    The reason is stored on hold/teleop/release frames because it is only known
+    when the operator presses a takeover key.  This helper propagates that
+    reason backward within the immediately preceding contiguous policy run,
+    without crossing an earlier human segment.
+    """
+    if provenance.intervention_reason is None:
+        return {}, {}
+    if provenance.intervention_stage is not None:
+        policy_mask = (
+            provenance.intervention_stage[episode_start:episode_stop]
+            == INTERVENTION_STAGE_POLICY
+        )
+    else:
+        policy_mask = provenance.is_intervention[episode_start:episode_stop] <= 0.5
+
+    run_by_frame: dict[int, int] = {}
+    reason_by_frame: dict[int, int] = {}
+    relative = 0
+    run_id = 0
+    frame_count = episode_stop - episode_start
+    while relative < frame_count:
+        if not bool(policy_mask[relative]):
+            relative += 1
+            continue
+        policy_start = relative
+        while relative < frame_count and bool(policy_mask[relative]):
+            relative += 1
+        policy_stop = relative
+        handoff_stop = relative
+        while handoff_stop < frame_count and not bool(policy_mask[handoff_stop]):
+            handoff_stop += 1
+        block = provenance.intervention_reason[
+            episode_start + policy_stop : episode_start + handoff_stop
+        ]
+        nonzero = block[block != int(INTERVENTION_REASON_NONE)].unique()
+        reason = int(INTERVENTION_REASON_NONE)
+        if nonzero.numel() > 1:
+            raise ValueError(
+                "One handoff segment contains multiple intervention reasons: "
+                f"{nonzero.tolist()}"
+            )
+        if nonzero.numel() == 1:
+            reason = int(nonzero.item())
+        for offset in range(policy_start, policy_stop):
+            frame = episode_start + offset
+            run_by_frame[frame] = run_id
+            reason_by_frame[frame] = reason
+        run_id += 1
+    return run_by_frame, reason_by_frame
 
 
 def _episode_provenance_group(
@@ -641,7 +799,13 @@ def _encoded_episode_to_transitions(
             f"vs transitions={len(transitions)}"
         )
 
+    policy_run_by_frame, policy_reason_by_frame = _policy_run_credit_semantics(
+        provenance,
+        episode_start=min(frame_indices),
+        episode_stop=episode_last_frame + 1,
+    )
     usable_by_anchor: dict[int, bool] = {}
+    policy_run_by_anchor: dict[int, int] = {}
     for transition, start_frame in zip(transitions, start_anchors, strict=True):
         source, human_override, usable = _chunk_provenance(
             provenance,
@@ -652,6 +816,32 @@ def _encoded_episode_to_transitions(
         usable_by_anchor[start_frame] = usable
         transition.source = torch.tensor(source)
         transition.intervention = torch.tensor(float(human_override))
+        reason = int(INTERVENTION_REASON_NONE)
+        if provenance.intervention_reason is not None:
+            if human_override:
+                reason = _intervention_reason_for_chunk(
+                    provenance,
+                    start_frame,
+                    chunk_length,
+                )
+                # Human actions provide BC supervision, but must not train the
+                # critic or actor-Q objective using an assisted terminal reward.
+                transition.critic_mask = torch.tensor(0.0)
+                transition.actor_q_mask = torch.tensor(0.0)
+            else:
+                reason = policy_reason_by_frame.get(
+                    start_frame,
+                    int(INTERVENTION_REASON_NONE),
+                )
+                run_id = policy_run_by_frame.get(start_frame)
+                if run_id is not None:
+                    policy_run_by_anchor[start_frame] = run_id
+                if reason == int(INTERVENTION_REASON_PROACTIVE):
+                    # A planned takeover censors the preceding policy prefix:
+                    # it is neither a success nor evidence of policy failure.
+                    transition.critic_mask = torch.tensor(0.0)
+                    transition.actor_q_mask = torch.tensor(0.0)
+        transition.intervention_reason = torch.tensor(reason, dtype=torch.long)
         # Never overwrite proposal/ref: training and deployment must condition
         # on the same independently generated VLA action. Only the BC target is
         # replaced on human chunks.
@@ -670,6 +860,21 @@ def _encoded_episode_to_transitions(
 
     anchor_to_index = {anchor: index for index, anchor in enumerate(start_anchors)}
 
+    corrective_terminal_by_run: dict[int, int] = {}
+    for transition, start_frame in zip(transitions, start_anchors, strict=True):
+        if not usable_by_anchor[start_frame]:
+            continue
+        if int(transition.intervention_reason.item()) != int(INTERVENTION_REASON_CORRECTIVE):
+            continue
+        if int(transition.source.item()) == TRANSITION_SOURCE_HUMAN_OVERRIDE:
+            continue
+        run_id = policy_run_by_anchor.get(start_frame)
+        if run_id is not None:
+            corrective_terminal_by_run[run_id] = max(
+                start_frame,
+                corrective_terminal_by_run.get(run_id, start_frame),
+            )
+
     should_filter = (
         provenance.intervention_stage is not None
         or legacy_handoff_policy == "drop"
@@ -680,6 +885,19 @@ def _encoded_episode_to_transitions(
     filtered: list[ChunkTransition] = []
     for transition, start_frame in zip(transitions, start_anchors, strict=True):
         if not usable_by_anchor[start_frame]:
+            continue
+        run_id = policy_run_by_anchor.get(start_frame)
+        corrective_terminal = (
+            run_id is not None
+            and corrective_terminal_by_run.get(run_id) == start_frame
+        )
+        if corrective_terminal:
+            # End the autonomous Bellman chain before human control.  The
+            # policy prefix remains useful negative critic evidence, but can no
+            # longer inherit the later human-assisted success reward.
+            transition.done = torch.tensor(1.0)
+            transition.reward_seq = torch.zeros_like(transition.reward_seq)
+            filtered.append(transition)
             continue
         next_index = anchor_to_index.get(start_frame + chunk_length)
         if (
@@ -800,9 +1018,18 @@ def _transition_summary(
     demo_delta_abs_max = 0.0
     demo_outside_bound = 0
     demo_samples = 0
+    critic_valid = 0
+    actor_q_valid = 0
+    corrective_transitions = 0
+    proactive_transitions = 0
     for transition in transitions:
         source = int(transition.source.item())
         source_counts[source] = source_counts.get(source, 0) + 1
+        critic_valid += int(float(transition.critic_mask.item()) > 0.5)
+        actor_q_valid += int(float(transition.actor_q_mask.item()) > 0.5)
+        reason = int(transition.intervention_reason.item())
+        corrective_transitions += int(reason == int(INTERVENTION_REASON_CORRECTIVE))
+        proactive_transitions += int(reason == int(INTERVENTION_REASON_PROACTIVE))
         if source == TRANSITION_SOURCE_DEMO:
             # Audit expert reachability independently of which demo BC target
             # mode was selected, so legacy VLA-target caches do not report a
@@ -830,7 +1057,7 @@ def _transition_summary(
                 float(delta.abs().max().item()) > residual_delta_scale + 1e-6
             )
             human_samples += 1
-        if bool(transition.done.item()):
+        if bool(transition.done.item()) and float(transition.critic_mask.item()) > 0.5:
             if float(transition.reward_seq.sum().item()) > 0:
                 success_terminal += 1
             else:
@@ -839,6 +1066,10 @@ def _transition_summary(
     human_rmse = (human_squared_error / max(human_elements, 1)) ** 0.5
     return (
         f"sources={dict(sorted(source_counts.items()))} "
+        f"critic_valid={critic_valid}/{len(transitions)} "
+        f"actor_q_valid={actor_q_valid}/{len(transitions)} "
+        f"corrective_labeled={corrective_transitions} "
+        f"proactive_labeled={proactive_transitions} "
         f"terminal_success={success_terminal} terminal_failure={failure_terminal} "
         f"demo_vla_action_rmse={demo_rmse:.6f} "
         f"demo_vla_action_abs_max={demo_delta_abs_max:.6f} "
@@ -933,7 +1164,11 @@ def main() -> None:
             f"pre_roll_frames={trim_pre_roll_frames} "
             f"action_dims={args.trim_leading_idle_action_dims}"
         )
-    provenance = _load_frame_provenance(dataset, args.provenance_mode)
+    provenance = _load_frame_provenance(
+        dataset,
+        args.provenance_mode,
+        args.missing_intervention_reason,
+    )
     n_episodes = dataset.num_episodes
     if args.max_episodes is not None:
         n_episodes = min(n_episodes, args.max_episodes)

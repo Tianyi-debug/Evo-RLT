@@ -24,6 +24,11 @@ def add_common_record_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset-tag", default=None)
     parser.add_argument("--vcodec", default="h264")
     parser.add_argument("--no-teleop", action="store_true", default=False)
+    parser.add_argument(
+        "--proactive-intervention-key",
+        default="p",
+        help="Key for a planned/proactive human takeover; the normal intervention key is corrective.",
+    )
     parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
     parser.add_argument(
         "--deterministic",
@@ -89,6 +94,11 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--play-sounds", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--rlt-toggle-key", default="r")
     parser.add_argument("--teleop-toggle-key", default="space")
+    parser.add_argument(
+        "--proactive-intervention-key",
+        default="p",
+        help="Key for a planned/proactive takeover; --teleop-toggle-key remains corrective.",
+    )
     parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
     parser.add_argument("--auto-reset-pose", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--reset-pose-path", default=None)

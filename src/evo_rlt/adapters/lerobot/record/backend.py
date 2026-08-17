@@ -130,6 +130,7 @@ from evo_rlt.adapters.lerobot.record.annotations import (
     COLLECTOR_HUMAN,
     COLLECTOR_POLICY,
     EPISODE_FAILURE,
+    INTERVENTION_REASON_CODEBOOK,
     RLT_COLLECTOR_POLICY_ID_TO_NAME,
     infer_collector_policy_version,
     normalize_episode_success_label,
@@ -287,6 +288,9 @@ class RecordConfig:
     intervention_state_machine_enabled: bool = True
     # Keyboard key used to toggle entering/leaving intervention.
     intervention_toggle_key: str = "i"
+    # Separate key for a planned/proactive takeover.  The normal intervention
+    # key is interpreted as a corrective takeover.
+    proactive_intervention_key: str = "p"
     # Pure-teleop mode: r key starts an episode (entering critical phase),
     # second r press ends the episode and marks it success; a double-tap
     # inside `rlt.rl_phase_double_tap_window_s` marks it failure. No VLA,
@@ -384,6 +388,12 @@ class RecordConfig:
             raise ValueError("Choose a policy, a teleoperator, or enable RLT to control the robot")
         if not self.intervention_toggle_key or len(self.intervention_toggle_key) != 1:
             raise ValueError("`intervention_toggle_key` must be a single character.")
+        if not self.proactive_intervention_key or len(self.proactive_intervention_key) != 1:
+            raise ValueError("`proactive_intervention_key` must be a single character.")
+        if self.intervention_toggle_key.lower() == self.proactive_intervention_key.lower():
+            raise ValueError(
+                "`intervention_toggle_key` and `proactive_intervention_key` must be distinct."
+            )
 
         if self.enable_episode_outcome_labeling:
             label_key_bindings = {
@@ -396,12 +406,13 @@ class RecordConfig:
 
             normalized_keys = [
                 self.intervention_toggle_key.lower(),
+                self.proactive_intervention_key.lower(),
                 self.episode_success_key.lower(),
                 self.episode_failure_key.lower(),
             ]
             if len(set(normalized_keys)) != len(normalized_keys):
                 raise ValueError(
-                    "`intervention_toggle_key`, `episode_success_key`, and `episode_failure_key` must be distinct."
+                    "intervention, proactive-intervention, success, and failure keys must be distinct."
                 )
 
         if self.rlt.enable:
@@ -411,6 +422,7 @@ class RecordConfig:
             reserved_keys = [
                 self.rlt.critical_phase_toggle_key.lower(),
                 self.intervention_toggle_key.lower(),
+                self.proactive_intervention_key.lower(),
             ]
             if self.enable_episode_outcome_labeling:
                 reserved_keys.append(self.episode_success_key.lower())
@@ -476,6 +488,11 @@ def _ensure_human_inloop_compatible_features(
         "shape": (1,),
         "names": ["intervention_stage"],
     }
+    dataset_features["complementary_info.intervention_reason"] = {
+        "dtype": "float32",
+        "shape": (1,),
+        "names": ["intervention_reason"],
+    }
     dataset_features["complementary_info.phase"] = {"dtype": "float32", "shape": (1,), "names": ["phase"]}
 
 
@@ -509,12 +526,15 @@ def _write_schema_metadata(
     if collector_info is None:
         return
     collector_info["info"] = {"codebook": collector_policy_id_codebook}
+    reason_info = dataset.meta.info["features"].get("complementary_info.intervention_reason")
+    if reason_info is not None:
+        reason_info["info"] = {"codebook": INTERVENTION_REASON_CODEBOOK}
     if include_rlt_episode_metadata:
         dataset.meta.info["rlt_episode_metadata_fields"] = {
             "rl_intervals": "List of {start_frame, end_frame, outcome} for each RL phase.",
             "human_intervention_intervals": "List of {start_frame, end_frame} for each human intervention segment.",
         }
-    dataset.meta.info["recording_schema_version"] = 2
+    dataset.meta.info["recording_schema_version"] = 3 if reason_info is not None else 2
     write_info(dataset.meta.info, dataset.root)
 
 
@@ -638,6 +658,15 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 encoder_queue_maxsize=cfg.dataset.encoder_queue_maxsize,
                 encoder_threads=cfg.dataset.encoder_threads,
             )
+            if "complementary_info.intervention_reason" not in dataset.features:
+                # A LeRobot dataset schema cannot be widened while appending.
+                # Keep old recordings resumable, but make the missing semantic
+                # label explicit so cache building can require a fallback.
+                dataset_features.pop("complementary_info.intervention_reason", None)
+                logging.warning(
+                    "Resuming a recording_schema_version<=2 dataset without "
+                    "intervention_reason; appended frames retain legacy credit semantics."
+                )
             sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
         else:
             # Create empty dataset or load existing saved episodes
@@ -745,6 +774,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         bind_ep_outcome_keys = cfg.enable_episode_outcome_labeling and not teleop_r_key_mode
         listener, events = init_keyboard_listener(
             intervention_toggle_key=" " if rlt_hil_mode else cfg.intervention_toggle_key,
+            proactive_intervention_key=cfg.proactive_intervention_key,
             critical_phase_toggle_key=cp_key if not rlt_active else None,
             episode_success_key=cfg.episode_success_key if bind_ep_outcome_keys else None,
             episode_failure_key=cfg.episode_failure_key if bind_ep_outcome_keys else None,

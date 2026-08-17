@@ -455,6 +455,70 @@ def test_transition_cache_v2_excludes_two_stage_hold_and_handoff_chunks():
     assert all(torch.equal(transition.bc_target_chunk, transition.exec_chunk) for transition in transitions)
 
 
+@pytest.mark.parametrize(
+    ("reason", "expected_prefix_mask", "expect_failure_terminal"),
+    [
+        (1, 1.0, True),
+        (2, 0.0, False),
+    ],
+)
+def test_transition_cache_v2_assigns_intervention_credit_semantics(
+    reason,
+    expected_prefix_mask,
+    expect_failure_terminal,
+):
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    chunk_length = 2
+    frame_indices = list(range(12))
+    provenance = module.FrameProvenance(
+        is_intervention=torch.tensor(
+            [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0],
+            dtype=torch.float32,
+        ),
+        collector_policy_id=torch.tensor([2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 2]),
+        intervention_stage=torch.tensor(
+            [0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 3],
+            dtype=torch.float32,
+        ),
+        intervention_reason=torch.tensor(
+            [0, 0, 0, 0, reason, reason, reason, reason, reason, reason, reason, reason]
+        ),
+    )
+
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.arange(12 * 4, dtype=torch.float32).view(12, 4),
+        ref_chunks=torch.randn(12, chunk_length, 2),
+        exec_chunks=torch.randn(12, chunk_length, 2),
+        frame_indices=frame_indices,
+        episode_last_frame=11,
+        chunk_length=chunk_length,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=70,
+        provenance=provenance,
+    )
+
+    policy = [t for t in transitions if int(t.source.item()) == module.TRANSITION_SOURCE_RL_AUTONOMOUS]
+    human = [t for t in transitions if int(t.source.item()) == module.TRANSITION_SOURCE_HUMAN_OVERRIDE]
+    assert policy
+    assert human
+    assert all(t.critic_mask.item() == expected_prefix_mask for t in policy)
+    assert all(t.actor_q_mask.item() == expected_prefix_mask for t in policy)
+    assert all(t.critic_mask.item() == 0.0 for t in human)
+    assert all(t.actor_q_mask.item() == 0.0 for t in human)
+    assert all(torch.equal(t.bc_target_chunk, t.exec_chunk) for t in human)
+
+    prefix_failure_terminals = [
+        t
+        for t in policy
+        if bool(t.done.item()) and float(t.reward_seq.sum().item()) == 0.0
+    ]
+    assert bool(prefix_failure_terminals) is expect_failure_terminal
+    if expect_failure_terminal:
+        assert len(prefix_failure_terminals) == 1
+
+
 def test_transition_cache_v2_stratifies_source_and_outcome_groups():
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 

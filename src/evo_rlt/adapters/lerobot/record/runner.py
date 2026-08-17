@@ -224,7 +224,11 @@ def _start_record_event_pedal_listener(
         logging.info("No pedal key bindings configured; pedal listener skipped")
         return None
 
-    cooldown_events = {"toggle_intervention", "toggle_critical_phase"}
+    cooldown_events = {
+        "toggle_intervention",
+        "toggle_proactive_intervention",
+        "toggle_critical_phase",
+    }
     last_event_times: dict[str, float] = {}
 
     def on_press(key_name: str) -> None:
@@ -303,6 +307,7 @@ def _ensure_record_events(events: dict[str, Any]) -> None:
     events.setdefault("episode_outcome", None)
     for event_name in [
         "toggle_intervention",
+        "toggle_proactive_intervention",
         "toggle_critical_phase",
         "cp_mark_success",
         "cp_mark_failure",
@@ -340,6 +345,7 @@ def _should_prefer_tty_keyboard(backend: str) -> bool:
 def _build_keyboard_event_bindings(
     *,
     intervention_toggle_key: str | None = "i",
+    proactive_intervention_key: str | None = "p",
     critical_phase_toggle_key: str | None = None,
     episode_success_key: str | None = None,
     episode_failure_key: str | None = None,
@@ -352,6 +358,7 @@ def _build_keyboard_event_bindings(
 ) -> dict[str, str]:
     raw_bindings: dict[str | None, str | None] = {
         intervention_toggle_key: "toggle_intervention",
+        proactive_intervention_key: "toggle_proactive_intervention",
         critical_phase_toggle_key: "toggle_critical_phase",
         episode_success_key: "episode_success",
         episode_failure_key: "episode_failure",
@@ -405,7 +412,11 @@ def _dispatch_keyboard_event(
     if event_name is None:
         return
 
-    if event_name in {"toggle_intervention", "toggle_critical_phase"}:
+    if event_name in {
+        "toggle_intervention",
+        "toggle_proactive_intervention",
+        "toggle_critical_phase",
+    }:
         now = time.monotonic()
         if now - last_event_times.get(event_name, 0.0) < KEYBOARD_TOGGLE_COOLDOWN_S:
             return
@@ -567,6 +578,7 @@ def _patch_keyboard_backend_selection() -> None:
         extra_bindings = kwargs.pop("_evo_rlt_extra_bindings", None)
         event_by_key = _build_keyboard_event_bindings(
             intervention_toggle_key=kwargs.pop("intervention_toggle_key", "i"),
+            proactive_intervention_key=kwargs.pop("proactive_intervention_key", "p"),
             critical_phase_toggle_key=kwargs.pop("critical_phase_toggle_key", None),
             episode_success_key=kwargs.pop("episode_success_key", None),
             episode_failure_key=kwargs.pop("episode_failure_key", None),
@@ -615,6 +627,7 @@ def _patch_double_tap_episode_outcome_listener(
 
     def init_keyboard_listener(*args, **kwargs):
         intervention_toggle_key = kwargs.pop("intervention_toggle_key", None)
+        proactive_intervention_key = kwargs.pop("proactive_intervention_key", None)
         critical_phase_toggle_key = kwargs.pop("critical_phase_toggle_key", None)
         kwargs.pop("episode_success_key", None)
         kwargs.pop("episode_failure_key", None)
@@ -625,6 +638,7 @@ def _patch_double_tap_episode_outcome_listener(
         end_failure_key = kwargs.pop("end_failure_key", None)
         record_key_bindings = {
             intervention_toggle_key: "toggle_intervention",
+            proactive_intervention_key: "toggle_proactive_intervention",
             critical_phase_toggle_key: "toggle_critical_phase",
             cp_success_key: "cp_mark_success",
             cp_failure_key: "cp_mark_failure",
@@ -958,6 +972,7 @@ def build_default_collect_record_argv(
             getattr(args, "default_episode_success", None),
         ),
         "--intervention_state_machine_enabled=true",
+        f"--proactive_intervention_key={getattr(args, 'proactive_intervention_key', 'p')}",
         f"--policy_sync_to_teleop={'true' if teleop_argv else 'false'}",
         f"--vla_ref={'true' if args.vla_ref else 'false'}",
         f"--play_sounds={'true' if args.play_sounds else 'false'}",
@@ -1023,6 +1038,7 @@ def print_collect_summary(
         "Controls: "
         f"{rlt_control}, "
         f"{args.teleop_toggle_key}=toggle teleop intervention"
+        f", {getattr(args, 'proactive_intervention_key', 'p')}=planned/proactive intervention"
     )
 
 
@@ -1103,6 +1119,7 @@ def build_segment_record_argv(args, setup, paths, cal_dir: str, teleop_argv: lis
         ),
         "--enable_episode_outcome_labeling=true",
         "--intervention_state_machine_enabled=true",
+        f"--proactive_intervention_key={getattr(args, 'proactive_intervention_key', 'p')}",
         (
             "--policy_sync_to_teleop="
             f"{'true' if teleop_argv and args.critical_source in {'rlt', 'vla'} else 'false'}"
@@ -1264,6 +1281,7 @@ def run_full(args: argparse.Namespace) -> None:
             ),
             *_episode_outcome_argv(True, args.default_episode_success),
             "--intervention_state_machine_enabled=true",
+            f"--proactive_intervention_key={getattr(args, 'proactive_intervention_key', 'p')}",
             f"--policy_sync_to_teleop={'true' if teleop_argv and args.initial_source == 'vla' else 'false'}",
             "--play_sounds=true",
         ]

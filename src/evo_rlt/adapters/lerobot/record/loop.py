@@ -58,6 +58,9 @@ from evo_rlt.adapters.lerobot.record.annotations import (
     INTERVENTION_STAGE_POLICY,
     INTERVENTION_STAGE_RELEASE,
     INTERVENTION_STAGE_TELEOP,
+    INTERVENTION_REASON_CORRECTIVE,
+    INTERVENTION_REASON_NONE,
+    INTERVENTION_REASON_PROACTIVE,
     PHASE_CRITICAL,
     PHASE_PREFIX,
     SOURCE_HUMAN,
@@ -299,8 +302,10 @@ def record_loop(
     # the wo_prefix HIL recorder where VLA should never drive.
     if start_in_teleop and intervention_enabled:
         intervention_state = INTERVENTION_STATE_ACTIVE
+        intervention_reason = INTERVENTION_REASON_PROACTIVE
     else:
         intervention_state = INTERVENTION_STATE_POLICY
+        intervention_reason = INTERVENTION_REASON_NONE
     last_teleop_action: RobotAction | None = None
     last_policy_action_for_blend: RobotAction | None = None
     intervention_blend_start_t: float | None = None
@@ -414,10 +419,12 @@ def record_loop(
             return 0
         return dataset.episode_buffer["size"]
 
-    def _arm_intervention_hold() -> None:
+    def _arm_intervention_hold(reason: float) -> None:
         nonlocal intervention_state, intervention_blend_start_t, intervention_blend_start_action
         nonlocal intervention_hold_armed, intervention_hold_action, pending_end_press_time
+        nonlocal intervention_reason
         intervention_state = INTERVENTION_STATE_ACTIVE
+        intervention_reason = reason
         intervention_hold_armed = True
         intervention_hold_action = None
         intervention_blend_start_t = None
@@ -432,12 +439,15 @@ def record_loop(
             "Press the intervention toggle again to enter manual teleoperation."
         )
 
-    def _activate_human_intervention() -> None:
+    def _activate_human_intervention(reason: float | None = None) -> None:
         nonlocal intervention_state, intervention_blend_start_t, intervention_blend_start_action
         nonlocal intervention_hold_armed, intervention_hold_action, pending_end_press_time
         nonlocal teleop_fallback_warned
+        nonlocal intervention_reason
         blend_start_action = intervention_hold_action or last_policy_action_for_blend
         intervention_state = INTERVENTION_STATE_ACTIVE
+        if reason is not None:
+            intervention_reason = reason
         intervention_hold_armed = False
         intervention_hold_action = None
         teleop_fallback_warned = False
@@ -491,17 +501,30 @@ def record_loop(
         logging.info("Intervention release requested (S2): returning control to policy.")
 
     def _handle_intervention_toggle() -> None:
-        if not events.get("toggle_intervention", False):
+        corrective_requested = bool(events.get("toggle_intervention", False))
+        proactive_requested = bool(events.get("toggle_proactive_intervention", False))
+        if not corrective_requested and not proactive_requested:
             return
         events["toggle_intervention"] = False
+        events["toggle_proactive_intervention"] = False
+        if corrective_requested and proactive_requested:
+            logging.warning(
+                "Corrective and proactive intervention keys arrived together; "
+                "using corrective semantics."
+            )
+        requested_reason = (
+            INTERVENTION_REASON_CORRECTIVE
+            if corrective_requested
+            else INTERVENTION_REASON_PROACTIVE
+        )
         if not intervention_enabled:
             logging.info("Intervention toggle ignored because policy+teleop are not both active.")
             return
         if intervention_state == INTERVENTION_STATE_POLICY:
             if two_stage_intervention:
-                _arm_intervention_hold()
+                _arm_intervention_hold(requested_reason)
             else:
-                _activate_human_intervention()
+                _activate_human_intervention(requested_reason)
             return
         if intervention_hold_armed:
             _activate_human_intervention()
@@ -883,6 +906,11 @@ def record_loop(
                     [intervention_stage],
                     dtype=np.float32,
                 )
+            if "complementary_info.intervention_reason" in dataset.features:
+                frame["complementary_info.intervention_reason"] = np.array(
+                    [intervention_reason],
+                    dtype=np.float32,
+                )
             if "complementary_info.collector_policy_id" in dataset.features:
                 collector_code = _collector_policy_code(is_intervention, selected_from_policy, rlt_source)
                 frame["complementary_info.collector_policy_id"] = np.array([collector_code], dtype=np.int64)
@@ -914,6 +942,7 @@ def record_loop(
 
         if intervention_state == INTERVENTION_STATE_RELEASE:
             intervention_state = INTERVENTION_STATE_POLICY
+            intervention_reason = INTERVENTION_REASON_NONE
 
         # Periodically defragment CUDA allocator and trigger Python GC to prevent
         # progressive inference slowdown from allocator fragmentation + GC pressure.

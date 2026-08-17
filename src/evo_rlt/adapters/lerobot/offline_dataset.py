@@ -312,6 +312,9 @@ def save_transition_cache(
             "source": t.source,
             "episode_id": t.episode_id,
             "is_critical": t.is_critical,
+            "critic_mask": t.critic_mask,
+            "actor_q_mask": t.actor_q_mask,
+            "intervention_reason": t.intervention_reason,
         }
         for t in transitions
     ]

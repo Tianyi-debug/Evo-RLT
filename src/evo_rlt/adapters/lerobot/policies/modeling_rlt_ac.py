@@ -323,7 +323,13 @@ class ChunkACPolicy(PreTrainedPolicy):
         # Compatibility aliases now consistently point to VLA proposals.
         out["ref_chunk_flat"] = out["proposal_chunk_flat"]
         out["next_ref_flat"] = out["next_proposal_flat"]
-        for key in ("source", "intervention", "cache_index"):
+        for key in (
+            "source",
+            "intervention",
+            "cache_index",
+            "critic_mask",
+            "actor_q_mask",
+        ):
             if key in batch:
                 value = batch[key]
                 if not isinstance(value, Tensor):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import torch
-import torch.nn.functional as F
 
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
@@ -89,8 +88,14 @@ def _masked_mean_squared_error(
     mask: torch.Tensor,
 ) -> torch.Tensor:
     per_sample = (prediction - target).square().reshape(prediction.shape[0], -1).mean(dim=1)
-    weights = mask.to(device=prediction.device, dtype=per_sample.dtype)
-    return (per_sample * weights).sum() / weights.sum()
+    return _masked_mean(per_sample, mask)
+
+
+def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Mean over valid samples, with a differentiable zero for an empty mask."""
+    per_sample = values.reshape(values.shape[0], -1).mean(dim=1)
+    weights = mask.reshape(-1).to(device=per_sample.device, dtype=per_sample.dtype)
+    return (per_sample * weights).sum() / weights.sum().clamp_min(1.0)
 
 
 def critic_loss_with_diagnostics(
@@ -138,10 +143,17 @@ def critic_loss_with_diagnostics(
         target = r + bootstrap
 
     q1, q2 = critic(x, a)
+    critic_mask = batch.get("critic_mask")
+    if critic_mask is None:
+        critic_valid = torch.ones(q1.shape[0], dtype=torch.bool, device=q1.device)
+    else:
+        critic_valid = critic_mask.reshape(-1).to(q1.device) > 0.5
     if bootstrap_mode == "none":
-        q1_mask = torch.ones(q1.shape[0], dtype=torch.bool, device=q1.device)
-        q2_mask = torch.ones(q2.shape[0], dtype=torch.bool, device=q2.device)
-        loss = F.mse_loss(q1, target) + F.mse_loss(q2, target)
+        q1_mask = critic_valid
+        q2_mask = critic_valid
+        loss = _masked_mean_squared_error(q1, target, q1_mask) + _masked_mean_squared_error(
+            q2, target, q2_mask
+        )
     elif bootstrap_mode == "fixed_bernoulli":
         if "cache_index" not in batch:
             raise KeyError("fixed_bernoulli critic bootstrap requires batch['cache_index']")
@@ -158,6 +170,8 @@ def critic_loss_with_diagnostics(
             keep_prob=bootstrap_keep_prob,
             seed=bootstrap_seed,
         )
+        q1_mask = q1_mask & critic_valid
+        q2_mask = q2_mask & critic_valid
         loss = _masked_mean_squared_error(q1, target, q1_mask) + _masked_mean_squared_error(
             q2,
             target,
@@ -168,16 +182,20 @@ def critic_loss_with_diagnostics(
             "bootstrap_mode must be 'none' or 'fixed_bernoulli', "
             f"got {bootstrap_mode!r}"
         )
+    td_abs = (
+        (q1.detach() - target.detach()).abs() + (q2.detach() - target.detach()).abs()
+    ) * 0.5
     diagnostics = {
-        "critic_q1_exec_mean": q1.detach().mean(),
-        "critic_q2_exec_mean": q2.detach().mean(),
-        "critic_q_min_exec_mean": torch.minimum(q1, q2).detach().mean(),
-        "critic_target_mean": target.detach().mean(),
-        "critic_td_abs_mean": (
-            ((q1.detach() - target.detach()).abs() + (q2.detach() - target.detach()).abs())
-            * 0.5
-        ).mean(),
-        "critic_exec_disagreement_mean": ((q1.detach() - q2.detach()).abs() * 0.5).mean(),
+        "critic_q1_exec_mean": _masked_mean(q1.detach(), critic_valid),
+        "critic_q2_exec_mean": _masked_mean(q2.detach(), critic_valid),
+        "critic_q_min_exec_mean": _masked_mean(torch.minimum(q1, q2).detach(), critic_valid),
+        "critic_target_mean": _masked_mean(target.detach(), critic_valid),
+        "critic_td_abs_mean": _masked_mean(td_abs, critic_valid),
+        "critic_exec_disagreement_mean": _masked_mean(
+            (q1.detach() - q2.detach()).abs() * 0.5,
+            critic_valid,
+        ),
+        "critic_valid_frac": critic_valid.float().mean(),
         "critic_bootstrap_q1_frac": q1_mask.float().mean(),
         "critic_bootstrap_q2_frac": q2_mask.float().mean(),
         "critic_bootstrap_overlap_frac": (q1_mask & q2_mask).float().mean(),
@@ -268,7 +286,12 @@ def actor_loss_with_diagnostics(
         else bc_target_raw
     )
     bc_per_sample = ((mu - bc_target) ** 2).sum(dim=-1)
-    q_loss = -q.mean()
+    actor_q_mask = batch.get("actor_q_mask")
+    if actor_q_mask is None:
+        actor_q_valid = torch.ones_like(q, dtype=torch.bool)
+    else:
+        actor_q_valid = actor_q_mask.reshape(-1).to(q.device) > 0.5
+    q_loss = -_masked_mean(q, actor_q_valid)
     bc_raw = bc_per_sample.mean()
     bc_weighted = (beta_per_sample * bc_per_sample).mean()
     loss = q_loss + bc_weighted
@@ -277,7 +300,7 @@ def actor_loss_with_diagnostics(
         "loss_actor_q": q_loss.detach(),
         "loss_actor_bc_raw": bc_raw.detach(),
         "loss_actor_bc_weighted": bc_weighted.detach(),
-        "actor_q_min_mean": q.detach().mean(),
+        "actor_q_min_mean": _masked_mean(q.detach(), actor_q_valid),
         "actor_ref_rmse": (
             (mu.detach() - proposal.detach().clamp(-1.0, 1.0)) ** 2
         ).mean().sqrt(),
@@ -293,6 +316,7 @@ def actor_loss_with_diagnostics(
         "actor_beta_mean": beta_per_sample.mean(),
         "actor_beta_min": beta_per_sample.min(),
         "actor_beta_max": beta_per_sample.max(),
+        "actor_q_valid_frac": actor_q_valid.float().mean(),
     }
 
     source = batch.get("source")
