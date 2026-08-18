@@ -120,6 +120,18 @@ def test_actor_only_backward_does_not_accumulate_critic_gradients():
     assert all(parameter.grad is None for parameter in policy.critic.parameters())
 
 
+def test_policy_forwards_zero_q_weight_to_actor_loss():
+    policy = _head_only_policy()
+    policy.config.actor_q_weight = 0.0
+
+    _, info = policy.forward(_batch())
+
+    assert info["actor_q_weight"] == pytest.approx(0.0)
+    assert info["loss_actor_q"] == pytest.approx(0.0)
+    assert info["loss_actor_q_weighted"] == pytest.approx(0.0)
+    assert math.isfinite(info["loss_actor_q_raw"])
+
+
 def test_human_bc_forward_is_actor_only_and_rejects_non_human_batches():
     policy = _head_only_policy()
     policy.config.training_stage = "human_bc"

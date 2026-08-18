@@ -595,6 +595,7 @@ class ChunkACPolicy(PreTrainedPolicy):
                 self.critic,
                 tx,
                 beta=self.config.beta,
+                q_weight=getattr(self.config, "actor_q_weight", 1.0),
                 weight_mode=getattr(self.config, "actor_bc_weight_mode", "fixed"),
                 uncertainty_tau_low=tau_low,
                 uncertainty_tau_high=tau_high,

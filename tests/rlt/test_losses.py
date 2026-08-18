@@ -212,6 +212,54 @@ def test_behavior_preservation_zero_is_backward_compatible(actor, critic, batch)
     assert explicit_info["actor_behavior_sample_frac"].item() == 0.0
 
 
+def test_zero_q_weight_removes_q_term_but_keeps_supervised_bc():
+    mu = torch.tensor([[0.25]], requires_grad=True)
+
+    class StubActor:
+        action_residual = False
+
+        def forward(self, state_vec, proposal, training=False):
+            return mu.expand_as(proposal), torch.zeros_like(proposal)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            q = 10.0 * action[:, :1]
+            return q, q
+
+    batch = {
+        "state_vec": torch.zeros(1, 1),
+        "proposal_chunk_flat": torch.zeros(1, 1),
+        "bc_target_chunk_flat": torch.ones(1, 1),
+    }
+    loss, diagnostics = actor_loss_with_diagnostics(
+        StubActor(),
+        StubCritic(),
+        batch,
+        beta=2.0,
+        q_weight=0.0,
+    )
+
+    # Q_raw=-2.5, but only 2 * (0.25 - 1)^2 contributes to optimization.
+    assert diagnostics["loss_actor_q_raw"].item() == pytest.approx(-2.5)
+    assert diagnostics["loss_actor_q"].item() == pytest.approx(0.0)
+    assert diagnostics["loss_actor_q_weighted"].item() == pytest.approx(0.0)
+    assert diagnostics["actor_q_weight"].item() == pytest.approx(0.0)
+    assert loss.item() == pytest.approx(2.0 * 0.75**2)
+    loss.backward()
+    assert mu.grad.item() == pytest.approx(2.0 * 2.0 * (0.25 - 1.0))
+
+
+def test_actor_loss_rejects_negative_q_weight(actor, critic, batch):
+    with pytest.raises(ValueError, match="q_weight"):
+        actor_loss_with_diagnostics(
+            actor,
+            critic,
+            batch,
+            beta=0.3,
+            q_weight=-0.1,
+        )
+
+
 def test_behavior_preservation_requires_source_and_exec(actor, critic, batch):
     with pytest.raises(KeyError, match="source"):
         actor_loss_with_diagnostics(

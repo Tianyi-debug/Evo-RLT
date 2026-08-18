@@ -63,6 +63,11 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     # --- TD3+BC hyperparams ---
     gamma: float = 0.99
     beta: float = 0.3
+    # Independent coefficient for the actor's Q-maximization term.  Keeping
+    # this at 1.0 preserves the historical TD3+BC objective exactly; setting
+    # it to 0.0 turns mixed_ac actor updates into supervised BC-only updates
+    # while the critic can continue training for diagnostics.
+    actor_q_weight: float = 1.0
     actor_bc_weight_mode: str = "fixed"
     actor_bc_uncertainty_tau_low: float = 0.0
     actor_bc_uncertainty_tau_high: float = 1.0
@@ -248,6 +253,10 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 "actor_behavior_preservation_weight must be non-negative, "
                 f"got {self.actor_behavior_preservation_weight}"
+            )
+        if self.actor_q_weight < 0:
+            raise ValueError(
+                f"actor_q_weight must be non-negative, got {self.actor_q_weight}"
             )
         if (
             self.actor_bc_weight_mode == "disagreement"

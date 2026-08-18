@@ -210,12 +210,14 @@ def actor_loss(
     batch: dict[str, torch.Tensor],
     beta: float,
     behavior_preservation_weight: float = 0.0,
+    q_weight: float = 1.0,
 ) -> torch.Tensor:
     loss, _ = actor_loss_with_diagnostics(
         actor=actor,
         critic=critic,
         batch=batch,
         beta=beta,
+        q_weight=q_weight,
         behavior_preservation_weight=behavior_preservation_weight,
     )
     return loss
@@ -231,6 +233,7 @@ def actor_loss_with_diagnostics(
     uncertainty_tau_high: float = 1.0,
     uncertainty_kappa: float = 0.0,
     behavior_preservation_weight: float = 0.0,
+    q_weight: float = 1.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Q-maximization plus BC toward an independently selected target.
 
@@ -243,7 +246,11 @@ def actor_loss_with_diagnostics(
     source=2 term anchors the actor to the action executed by the behavior
     policy. When intervention_reason is present, assisted prefixes are excluded
     from that anchor so failed/censored takeover context is not preserved.
+    ``q_weight`` independently scales direct Q-gradient trust; zero leaves the
+    supervised BC objectives active while preventing Q from moving the actor.
     """
+    if q_weight < 0:
+        raise ValueError(f"q_weight must be non-negative, got {q_weight}")
     if behavior_preservation_weight < 0:
         raise ValueError(
             "behavior_preservation_weight must be non-negative, "
@@ -339,10 +346,18 @@ def actor_loss_with_diagnostics(
             behavior_mask,
         ).sqrt()
     behavior_bc_weighted = float(behavior_preservation_weight) * behavior_bc_raw
-    loss = q_loss + bc_weighted + behavior_bc_weighted
+    q_weighted = float(q_weight) * q_loss
+    loss = q_weighted + bc_weighted + behavior_bc_weighted
 
     diagnostics = {
-        "loss_actor_q": q_loss.detach(),
+        # Keep loss_actor_q as the term that actually contributes to the total
+        # loss.  At the backward-compatible default q_weight=1 it is identical
+        # to the historical value.  The raw value remains available when the
+        # Q term is disabled or down-weighted.
+        "loss_actor_q": q_weighted.detach(),
+        "loss_actor_q_raw": q_loss.detach(),
+        "loss_actor_q_weighted": q_weighted.detach(),
+        "actor_q_weight": q.new_tensor(float(q_weight)),
         "loss_actor_bc_raw": bc_raw.detach(),
         "loss_actor_bc_weighted": bc_weighted.detach(),
         "loss_actor_behavior_bc_raw": behavior_bc_raw.detach(),

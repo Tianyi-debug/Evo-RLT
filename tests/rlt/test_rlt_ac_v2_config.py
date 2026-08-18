@@ -20,6 +20,7 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.actor_delta_scale_per_action_dim is None
     assert config.actor_ref_dropout_p == 0.0
     assert config.actor_bc_weight_mode == "fixed"
+    assert config.actor_q_weight == pytest.approx(1.0)
     assert config.actor_bc_uncertainty_kappa == 0.0
     assert config.actor_bc_uncertainty_threshold_mode == "fixed"
     assert config.actor_bc_uncertainty_ema_decay == pytest.approx(0.95)
@@ -172,6 +173,7 @@ def test_two_stage_training_config_validates_and_round_trips(tmp_path):
         actor_lr=1e-5,
         critic_lr=1e-4,
         actor_behavior_preservation_weight=0.25,
+        actor_q_weight=0.0,
     )
     config.save_pretrained(tmp_path)
 
@@ -185,6 +187,7 @@ def test_two_stage_training_config_validates_and_round_trips(tmp_path):
     assert loaded.actor_lr == pytest.approx(1e-5)
     assert loaded.critic_lr == pytest.approx(1e-4)
     assert loaded.actor_behavior_preservation_weight == pytest.approx(0.25)
+    assert loaded.actor_q_weight == pytest.approx(0.0)
     assert loaded.get_optimizer_preset().lr == pytest.approx(1e-4)
 
     critic_only = ChunkACPolicyConfig(
@@ -214,3 +217,5 @@ def test_two_stage_training_config_validates_and_round_trips(tmp_path):
         ChunkACPolicyConfig(critic_lr=-1e-4)
     with pytest.raises(ValueError, match="actor_behavior_preservation_weight"):
         ChunkACPolicyConfig(actor_behavior_preservation_weight=-0.1)
+    with pytest.raises(ValueError, match="actor_q_weight"):
+        ChunkACPolicyConfig(actor_q_weight=-0.1)
