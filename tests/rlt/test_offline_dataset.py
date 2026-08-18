@@ -113,6 +113,20 @@ def test_chunk_transition_dataset_human_bc_filters_source_3(tmp_path):
     assert all(dataset[index]["source"].item() == 3 for index in range(len(dataset)))
 
 
+def test_chunk_transition_dataset_critic_only_keeps_mixed_sampling(tmp_path):
+    _write_source_cache(tmp_path, [0] * 4 + [2] * 4 + [3] * 4)
+
+    dataset = ChunkTransitionDataset(
+        tmp_path,
+        training_stage="critic_only",
+        source_sampling_weights=[0.5, 0.0, 0.5, 0.0],
+        source_sampling_seed=11,
+    )
+
+    assert len(dataset) == 12
+    assert dataset.sampling_source_counts == {0: 6, 2: 6}
+
+
 def test_chunk_transition_dataset_mixed_source_weights_are_exact_and_deterministic(tmp_path):
     _write_source_cache(tmp_path, [1] * 8 + [2] * 2 + [3] * 2)
 

@@ -152,6 +152,87 @@ def test_actor_q_mask_keeps_human_bc_but_excludes_human_q():
     assert diagnostics["actor_q_valid_frac"].item() == pytest.approx(0.5)
 
 
+def test_source2_behavior_preservation_uses_exec_and_excludes_assisted_prefixes():
+    class StubActor:
+        action_residual = False
+
+        def forward(self, state_vec, proposal, training=False):
+            return torch.zeros_like(proposal), torch.zeros_like(proposal)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            q = action[:, :1] * 0.0
+            return q, q
+
+    batch = {
+        "state_vec": torch.zeros(3, 1),
+        "proposal_chunk_flat": torch.zeros(3, 2),
+        "bc_target_chunk_flat": torch.zeros(3, 2),
+        "exec_chunk_flat": torch.tensor([[1.0, 0.0], [10.0, 0.0], [5.0, 0.0]]),
+        "source": torch.tensor([2, 2, 3]),
+        "intervention_reason": torch.tensor([0, 1, 0]),
+    }
+
+    loss, diagnostics = actor_loss_with_diagnostics(
+        StubActor(),
+        StubCritic(),
+        batch,
+        beta=1.0,
+        behavior_preservation_weight=0.5,
+    )
+
+    # Only the unassisted source=2 sample is retained: ||[0,0]-[1,0]||^2 = 1.
+    assert loss.item() == pytest.approx(0.5)
+    assert diagnostics["loss_actor_behavior_bc_raw"].item() == pytest.approx(1.0)
+    assert diagnostics["loss_actor_behavior_bc_weighted"].item() == pytest.approx(0.5)
+    assert diagnostics["actor_behavior_sample_frac"].item() == pytest.approx(1 / 3)
+    assert diagnostics["actor_behavior_target_rmse"].item() == pytest.approx(2**-0.5)
+
+
+def test_behavior_preservation_zero_is_backward_compatible(actor, critic, batch):
+    torch.manual_seed(321)
+    original, original_info = actor_loss_with_diagnostics(
+        actor,
+        critic,
+        batch,
+        beta=0.3,
+    )
+    torch.manual_seed(321)
+    explicit, explicit_info = actor_loss_with_diagnostics(
+        actor,
+        critic,
+        batch,
+        beta=0.3,
+        behavior_preservation_weight=0.0,
+    )
+
+    assert torch.equal(original, explicit)
+    assert original_info.keys() == explicit_info.keys()
+    assert explicit_info["loss_actor_behavior_bc_raw"].item() == 0.0
+    assert explicit_info["actor_behavior_sample_frac"].item() == 0.0
+
+
+def test_behavior_preservation_requires_source_and_exec(actor, critic, batch):
+    with pytest.raises(KeyError, match="source"):
+        actor_loss_with_diagnostics(
+            actor,
+            critic,
+            batch,
+            beta=0.3,
+            behavior_preservation_weight=0.1,
+        )
+
+    without_exec = {key: value for key, value in batch.items() if key != "exec_chunk_flat"}
+    with pytest.raises(KeyError, match="exec_chunk_flat"):
+        actor_loss_with_diagnostics(
+            actor,
+            critic,
+            {**without_exec, "source": torch.full((16,), 2)},
+            beta=0.3,
+            behavior_preservation_weight=0.1,
+        )
+
+
 def test_bootstrap_none_is_exactly_the_legacy_default(actor, critic, target_critic, batch):
     default_loss, default_info = critic_loss_with_diagnostics(
         critic,

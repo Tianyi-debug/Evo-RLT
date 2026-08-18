@@ -30,6 +30,9 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.training_stage == "mixed_ac"
     assert config.source_sampling_weights is None
     assert config.training_lr == pytest.approx(3e-4)
+    assert config.actor_lr is None
+    assert config.critic_lr is None
+    assert config.actor_behavior_preservation_weight == 0.0
 
 
 def test_per_action_dim_delta_scale_validates_action_shape():
@@ -166,6 +169,9 @@ def test_two_stage_training_config_validates_and_round_trips(tmp_path):
         source_sampling_weights=[0.0, 0.0, 0.0, 1.0],
         source_sampling_seed=17,
         training_lr=1e-4,
+        actor_lr=1e-5,
+        critic_lr=1e-4,
+        actor_behavior_preservation_weight=0.25,
     )
     config.save_pretrained(tmp_path)
 
@@ -176,10 +182,24 @@ def test_two_stage_training_config_validates_and_round_trips(tmp_path):
     assert loaded.source_sampling_weights == [0.0, 0.0, 0.0, 1.0]
     assert loaded.source_sampling_seed == 17
     assert loaded.training_lr == pytest.approx(1e-4)
+    assert loaded.actor_lr == pytest.approx(1e-5)
+    assert loaded.critic_lr == pytest.approx(1e-4)
+    assert loaded.actor_behavior_preservation_weight == pytest.approx(0.25)
     assert loaded.get_optimizer_preset().lr == pytest.approx(1e-4)
 
+    critic_only = ChunkACPolicyConfig(
+        training_stage="critic_only",
+        actor_lr=1e-5,
+        critic_lr=1e-4,
+        actor_behavior_preservation_weight=0.25,
+    )
+    assert critic_only.training_stage == "critic_only"
+    assert critic_only.actor_lr == pytest.approx(1e-5)
+    assert critic_only.critic_lr == pytest.approx(1e-4)
+    assert critic_only.actor_behavior_preservation_weight == pytest.approx(0.25)
+
     with pytest.raises(ValueError, match="training_stage"):
-        ChunkACPolicyConfig(training_stage="critic_only")
+        ChunkACPolicyConfig(training_stage="unsupported")
     with pytest.raises(ValueError, match="four values"):
         ChunkACPolicyConfig(source_sampling_weights=[0.5, 0.5])
     with pytest.raises(ValueError, match="non-negative"):
@@ -188,3 +208,9 @@ def test_two_stage_training_config_validates_and_round_trips(tmp_path):
         ChunkACPolicyConfig(source_sampling_weights=[0.0, 0.0, 0.0, 0.0])
     with pytest.raises(ValueError, match="training_lr"):
         ChunkACPolicyConfig(training_lr=0.0)
+    with pytest.raises(ValueError, match="actor_lr"):
+        ChunkACPolicyConfig(actor_lr=0.0)
+    with pytest.raises(ValueError, match="critic_lr"):
+        ChunkACPolicyConfig(critic_lr=-1e-4)
+    with pytest.raises(ValueError, match="actor_behavior_preservation_weight"):
+        ChunkACPolicyConfig(actor_behavior_preservation_weight=-0.1)

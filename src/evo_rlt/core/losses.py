@@ -209,12 +209,14 @@ def actor_loss(
     critic: TwinCritic,
     batch: dict[str, torch.Tensor],
     beta: float,
+    behavior_preservation_weight: float = 0.0,
 ) -> torch.Tensor:
     loss, _ = actor_loss_with_diagnostics(
         actor=actor,
         critic=critic,
         batch=batch,
         beta=beta,
+        behavior_preservation_weight=behavior_preservation_weight,
     )
     return loss
 
@@ -228,6 +230,7 @@ def actor_loss_with_diagnostics(
     uncertainty_tau_low: float = 0.0,
     uncertainty_tau_high: float = 1.0,
     uncertainty_kappa: float = 0.0,
+    behavior_preservation_weight: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Q-maximization plus BC toward an independently selected target.
 
@@ -236,8 +239,16 @@ def actor_loss_with_diagnostics(
     correction. Uses deterministic mean (not noisy samples) for stability.
     BC term is the per-sample squared distance summed across action dims, then
     averaged over the batch — matching the paper's β-scaling convention. This
-    differs from mean-MSE by a factor of C*D_flat.
+    differs from mean-MSE by a factor of C*D_flat. An optional conservative
+    source=2 term anchors the actor to the action executed by the behavior
+    policy. When intervention_reason is present, assisted prefixes are excluded
+    from that anchor so failed/censored takeover context is not preserved.
     """
+    if behavior_preservation_weight < 0:
+        raise ValueError(
+            "behavior_preservation_weight must be non-negative, "
+            f"got {behavior_preservation_weight}"
+        )
     x = batch["state_vec"]
     proposal = batch.get("proposal_chunk_flat", batch.get("ref_chunk_flat"))
     if proposal is None:
@@ -294,12 +305,50 @@ def actor_loss_with_diagnostics(
     q_loss = -_masked_mean(q, actor_q_valid)
     bc_raw = bc_per_sample.mean()
     bc_weighted = (beta_per_sample * bc_per_sample).mean()
-    loss = q_loss + bc_weighted
+
+    source = batch.get("source")
+    if source is not None:
+        source = source.detach().reshape(-1).to(disagreement.device)
+    behavior_mask = torch.zeros_like(q, dtype=torch.bool)
+    behavior_bc_raw = q.new_zeros(())
+    behavior_target_rmse = q.new_zeros(())
+    if behavior_preservation_weight > 0:
+        if source is None:
+            raise KeyError(
+                "behavior preservation requires batch['source'] to select source=2"
+            )
+        behavior_target_raw = batch.get("exec_chunk_flat")
+        if behavior_target_raw is None:
+            raise KeyError(
+                "behavior preservation requires batch['exec_chunk_flat']"
+            )
+        behavior_mask = source == 2
+        intervention_reason = batch.get("intervention_reason")
+        if intervention_reason is not None:
+            reason = intervention_reason.detach().reshape(-1).to(source.device)
+            behavior_mask = behavior_mask & (reason == 0)
+        behavior_target = (
+            behavior_target_raw.clamp(-1.0, 1.0)
+            if getattr(actor, "action_residual", False)
+            else behavior_target_raw
+        )
+        behavior_per_sample = (mu - behavior_target).square().sum(dim=-1)
+        behavior_bc_raw = _masked_mean(behavior_per_sample, behavior_mask)
+        behavior_target_rmse = _masked_mean(
+            (mu.detach() - behavior_target.detach()).square().mean(dim=-1),
+            behavior_mask,
+        ).sqrt()
+    behavior_bc_weighted = float(behavior_preservation_weight) * behavior_bc_raw
+    loss = q_loss + bc_weighted + behavior_bc_weighted
 
     diagnostics = {
         "loss_actor_q": q_loss.detach(),
         "loss_actor_bc_raw": bc_raw.detach(),
         "loss_actor_bc_weighted": bc_weighted.detach(),
+        "loss_actor_behavior_bc_raw": behavior_bc_raw.detach(),
+        "loss_actor_behavior_bc_weighted": behavior_bc_weighted.detach(),
+        "actor_behavior_sample_frac": behavior_mask.float().mean(),
+        "actor_behavior_target_rmse": behavior_target_rmse.detach(),
         "actor_q_min_mean": _masked_mean(q.detach(), actor_q_valid),
         "actor_ref_rmse": (
             (mu.detach() - proposal.detach().clamp(-1.0, 1.0)) ** 2
@@ -319,9 +368,7 @@ def actor_loss_with_diagnostics(
         "actor_q_valid_frac": actor_q_valid.float().mean(),
     }
 
-    source = batch.get("source")
     if source is not None:
-        source = source.detach().reshape(-1).to(disagreement.device)
         for source_id in range(4):
             mask = source == source_id
             diagnostics[f"source_{source_id}_frac"] = mask.float().mean()

@@ -159,6 +159,9 @@ class ChunkACPolicy(PreTrainedPolicy):
         if config.training_stage == "human_bc":
             for p in self.critic.parameters():
                 p.requires_grad = False
+        elif config.training_stage == "critic_only":
+            for p in self.actor.parameters():
+                p.requires_grad = False
 
         # Persistent step counter — survives ckpt save/load.
         self.register_buffer("_critic_step", torch.zeros((), dtype=torch.long), persistent=True)
@@ -329,6 +332,7 @@ class ChunkACPolicy(PreTrainedPolicy):
             "cache_index",
             "critic_mask",
             "actor_q_mask",
+            "intervention_reason",
         ):
             if key in batch:
                 value = batch[key]
@@ -340,7 +344,8 @@ class ChunkACPolicy(PreTrainedPolicy):
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict | None]:
         tx = self._coerce_batch(batch)
 
-        if getattr(self.config, "training_stage", "mixed_ac") == "human_bc":
+        training_stage = getattr(self.config, "training_stage", "mixed_ac")
+        if training_stage == "human_bc":
             return self._forward_human_bc(tx)
 
         c_loss, critic_info = critic_loss_with_diagnostics(
@@ -363,6 +368,19 @@ class ChunkACPolicy(PreTrainedPolicy):
         self._critic_step += 1
 
         source_info = self._source_fraction_diagnostics(tx)
+        if training_stage == "critic_only":
+            raw_info = {
+                "loss_total_step": c_loss.detach(),
+                "loss_critic": c_loss.detach(),
+                "critic_step": self._critic_step.detach().clone(),
+                "actor_update": False,
+                "critic_only_stage": True,
+                **critic_info,
+                **source_info,
+            }
+            info = self._finalize_diagnostics(raw_info)
+            return c_loss, info
+
         do_actor = (int(self._critic_step.item()) % self.config.actor_update_interval) == 0
         if do_actor:
             a_loss, actor_info = self._actor_loss_without_critic_grads(tx)
@@ -583,6 +601,11 @@ class ChunkACPolicy(PreTrainedPolicy):
                 uncertainty_kappa=getattr(
                     self.config,
                     "actor_bc_uncertainty_kappa",
+                    0.0,
+                ),
+                behavior_preservation_weight=getattr(
+                    self.config,
+                    "actor_behavior_preservation_weight",
                     0.0,
                 ),
             )
@@ -982,12 +1005,21 @@ class ChunkACPolicy(PreTrainedPolicy):
         return self.modifier.pop_step_metadata()
 
     def get_optim_params(self) -> list:
-        if getattr(self.config, "training_stage", "mixed_ac") == "human_bc":
-            return [{"params": list(self.actor.parameters())}]
-        return [
-            {"params": list(self.actor.parameters())},
-            {"params": list(self.critic.parameters())},
-        ]
+        actor_group = {"params": list(self.actor.parameters())}
+        critic_group = {"params": list(self.critic.parameters())}
+        actor_lr = getattr(self.config, "actor_lr", None)
+        critic_lr = getattr(self.config, "critic_lr", None)
+        if actor_lr is not None:
+            actor_group["lr"] = float(actor_lr)
+        if critic_lr is not None:
+            critic_group["lr"] = float(critic_lr)
+
+        training_stage = getattr(self.config, "training_stage", "mixed_ac")
+        if training_stage == "human_bc":
+            return [actor_group]
+        if training_stage == "critic_only":
+            return [critic_group]
+        return [actor_group, critic_group]
 
     # ------------------------------------------------------------------
     # Device + train-mode plumbing for the stashed backbone

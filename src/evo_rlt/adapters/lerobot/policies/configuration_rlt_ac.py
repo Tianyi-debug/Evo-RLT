@@ -82,14 +82,25 @@ class ChunkACPolicyConfig(PreTrainedConfig):
 
     # --- Offline training stage + source balancing ---
     # ``human_bc`` performs actor-only residual behavior cloning on source=3
-    # transitions. ``mixed_ac`` keeps the regular TD3+BC actor-critic update.
+    # transitions. ``critic_only`` updates only the critic/target critic while
+    # keeping the loaded actor bit-identical. ``mixed_ac`` keeps the regular
+    # TD3+BC actor-critic update.
     training_stage: str = "mixed_ac"
     # Replay-level source weights ordered as [demo, VLA, RL autonomous, human].
     # The transition dataset realizes these weights with a deterministic virtual
     # index map while keeping one epoch equal to the original cache length.
     source_sampling_weights: list[float] | None = None
     source_sampling_seed: int = 1000
+    # Backward-compatible optimizer default. Explicit component learning rates
+    # take precedence in the optimizer parameter groups when provided.
     training_lr: float = 3e-4
+    actor_lr: float | None = None
+    critic_lr: float | None = None
+    # Conservative online refinement: on source=2 autonomous rollout chunks,
+    # penalize drift from the action that the behavior policy actually
+    # executed. Assisted prefixes are excluded when intervention_reason is
+    # available. Zero preserves the original TD3+BC objective exactly.
+    actor_behavior_preservation_weight: float = 0.0
 
     # --- Shapes ---
     chunk_length: int = 10
@@ -208,9 +219,9 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 f"critic_bootstrap_seed must be non-negative, got {self.critic_bootstrap_seed}"
             )
-        if self.training_stage not in ("mixed_ac", "human_bc"):
+        if self.training_stage not in ("mixed_ac", "human_bc", "critic_only"):
             raise ValueError(
-                "training_stage must be 'mixed_ac' or 'human_bc', "
+                "training_stage must be 'mixed_ac', 'human_bc', or 'critic_only', "
                 f"got {self.training_stage!r}"
             )
         if self.source_sampling_weights is not None:
@@ -229,6 +240,15 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             )
         if self.training_lr <= 0:
             raise ValueError(f"training_lr must be positive, got {self.training_lr}")
+        if self.actor_lr is not None and self.actor_lr <= 0:
+            raise ValueError(f"actor_lr must be positive when set, got {self.actor_lr}")
+        if self.critic_lr is not None and self.critic_lr <= 0:
+            raise ValueError(f"critic_lr must be positive when set, got {self.critic_lr}")
+        if self.actor_behavior_preservation_weight < 0:
+            raise ValueError(
+                "actor_behavior_preservation_weight must be non-negative, "
+                f"got {self.actor_behavior_preservation_weight}"
+            )
         if (
             self.actor_bc_weight_mode == "disagreement"
             and self.actor_bc_uncertainty_tau_high

@@ -203,3 +203,87 @@ def test_lerobot_ac_actor_loss_does_not_add_critic_grads(batch):
 
     for name, p in policy.critic.named_parameters():
         assert torch.allclose(p.grad, expected[name], atol=1e-6, rtol=1e-5)
+
+
+def test_lerobot_ac_critic_only_forward_never_updates_actor(batch):
+    from types import SimpleNamespace
+
+    from evo_rlt.adapters.lerobot.policies.modeling_rlt_ac import ChunkACPolicy
+    from evo_rlt.core.actor import ChunkActor
+    from evo_rlt.core.critic import TwinCritic
+
+    policy = object.__new__(ChunkACPolicy)
+    torch.nn.Module.__init__(policy)
+    policy.config = SimpleNamespace(
+        training_stage="critic_only",
+        gamma=0.99,
+        chunk_length=C,
+        tau=0.005,
+        actor_update_interval=2,
+        beta=1.0,
+        target_q_clip=100.0,
+    )
+    policy.actor = ChunkActor(STATE_DIM, CHUNK_DIM, hidden_dim=32, num_layers=2)
+    policy.critic = TwinCritic(STATE_DIM, CHUNK_DIM, hidden_dim=32, num_layers=2)
+    policy.target_critic = copy.deepcopy(policy.critic)
+    policy.register_buffer("_critic_step", torch.zeros((), dtype=torch.long))
+
+    lerobot_batch = dict(batch)
+    lerobot_batch["exec_chunk"] = lerobot_batch.pop("exec_chunk_flat").view(-1, C, ACTION_DIM)
+    lerobot_batch["ref_chunk"] = lerobot_batch.pop("ref_chunk_flat").view(-1, C, ACTION_DIM)
+    lerobot_batch["next_ref_chunk"] = lerobot_batch.pop("next_ref_flat").view(
+        -1, C, ACTION_DIM
+    )
+
+    loss, info = policy.forward(lerobot_batch)
+    loss.backward()
+
+    assert info["critic_only_stage"] is True
+    assert info["actor_update"] is False
+    assert info["critic_step"] == 1
+    assert all(parameter.grad is None for parameter in policy.actor.parameters())
+    assert any(parameter.grad is not None for parameter in policy.critic.parameters())
+
+
+def test_lerobot_ac_optimizer_groups_use_independent_learning_rates():
+    from types import SimpleNamespace
+
+    from evo_rlt.adapters.lerobot.policies.modeling_rlt_ac import ChunkACPolicy
+    from evo_rlt.core.actor import ChunkActor
+    from evo_rlt.core.critic import TwinCritic
+
+    policy = object.__new__(ChunkACPolicy)
+    torch.nn.Module.__init__(policy)
+    policy.actor = ChunkActor(STATE_DIM, CHUNK_DIM, hidden_dim=32, num_layers=2)
+    policy.critic = TwinCritic(STATE_DIM, CHUNK_DIM, hidden_dim=32, num_layers=2)
+    policy.config = SimpleNamespace(
+        training_stage="mixed_ac",
+        actor_lr=1e-5,
+        critic_lr=1e-4,
+    )
+
+    groups = policy.get_optim_params()
+    assert len(groups) == 2
+    assert groups[0]["lr"] == pytest.approx(1e-5)
+    assert groups[1]["lr"] == pytest.approx(1e-4)
+    assert {id(parameter) for parameter in groups[0]["params"]} == {
+        id(parameter) for parameter in policy.actor.parameters()
+    }
+    assert {id(parameter) for parameter in groups[1]["params"]} == {
+        id(parameter) for parameter in policy.critic.parameters()
+    }
+
+    policy.config.training_stage = "critic_only"
+    critic_only_groups = policy.get_optim_params()
+    assert len(critic_only_groups) == 1
+    assert critic_only_groups[0]["lr"] == pytest.approx(1e-4)
+    assert {id(parameter) for parameter in critic_only_groups[0]["params"]} == {
+        id(parameter) for parameter in policy.critic.parameters()
+    }
+    policy.config.training_stage = "human_bc"
+    human_bc_groups = policy.get_optim_params()
+    assert len(human_bc_groups) == 1
+    assert human_bc_groups[0]["lr"] == pytest.approx(1e-5)
+    assert {id(parameter) for parameter in human_bc_groups[0]["params"]} == {
+        id(parameter) for parameter in policy.actor.parameters()
+    }
