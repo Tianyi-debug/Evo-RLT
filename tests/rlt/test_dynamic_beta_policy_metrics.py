@@ -120,6 +120,20 @@ def test_actor_only_backward_does_not_accumulate_critic_gradients():
     assert all(parameter.grad is None for parameter in policy.critic.parameters())
 
 
+def test_policy_coerce_batch_preserves_semantic_v2_bootstrap_fields():
+    policy = _head_only_policy()
+    batch = _batch()
+    batch["bootstrap_mask"] = torch.tensor([1, 1, 0, 0, 1, 1, 0, 0])
+    batch["cache_semantics_version"] = torch.full((8,), 2)
+
+    tx = policy._coerce_batch(batch)
+
+    assert torch.equal(tx["bootstrap_mask"], batch["bootstrap_mask"])
+    assert torch.equal(
+        tx["cache_semantics_version"], batch["cache_semantics_version"]
+    )
+
+
 def test_policy_forwards_zero_q_weight_to_actor_loss():
     policy = _head_only_policy()
     policy.config.actor_q_weight = 0.0

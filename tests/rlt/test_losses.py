@@ -11,6 +11,7 @@ from evo_rlt.core.losses import (
     critic_loss_with_diagnostics,
     discounted_chunk_return,
     fixed_bootstrap_mask,
+    resolve_td_bootstrap_mask,
 )
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
@@ -83,6 +84,63 @@ def test_done_masking(actor, critic, target_critic):
     }
     loss = critic_loss(critic, target_critic, actor, batch_done, gamma=0.99, C=C)
     assert not torch.isnan(loss)
+
+
+def test_legacy_cache_without_bootstrap_mask_falls_back_to_one_minus_done():
+    done = torch.tensor([0.0, 1.0, 0.0])
+
+    resolved = resolve_td_bootstrap_mask({"done": done}, done)
+
+    assert torch.equal(resolved, torch.tensor([1.0, 0.0, 1.0]))
+
+
+def test_semantic_v2_batch_cannot_silently_drop_bootstrap_mask():
+    done = torch.tensor([0.0, 1.0])
+
+    with pytest.raises(KeyError, match=r"requires batch\['bootstrap_mask'\]"):
+        resolve_td_bootstrap_mask(
+            {
+                "done": done,
+                "cache_semantics_version": torch.tensor([2, 2]),
+            },
+            done,
+        )
+
+
+def test_bootstrap_mask_stops_q_target_without_overloading_done():
+    class StubActor:
+        def forward(self, state_vec, ref_chunk, training=False):
+            return torch.zeros_like(ref_chunk), torch.zeros_like(ref_chunk)
+
+    class StubTarget:
+        def min_q(self, state_vec, action):
+            return torch.full((state_vec.shape[0], 1), 10.0)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            zeros = torch.zeros(state_vec.shape[0], 1)
+            return zeros, zeros
+
+    censored_batch = {
+        "state_vec": torch.zeros(1, 2),
+        "exec_chunk_flat": torch.zeros(1, 1),
+        "ref_chunk_flat": torch.zeros(1, 1),
+        "reward_seq": torch.zeros(1, 1),
+        "next_state_vec": torch.zeros(1, 2),
+        "next_ref_flat": torch.zeros(1, 1),
+        "done": torch.zeros(1),
+        "bootstrap_mask": torch.zeros(1),
+        "cache_semantics_version": torch.full((1,), 2),
+        "actual_steps": torch.ones(1, dtype=torch.long),
+    }
+
+    loss, diagnostics = critic_loss_with_diagnostics(
+        StubCritic(), StubTarget(), StubActor(), censored_batch, gamma=0.9, C=1
+    )
+
+    assert loss.item() == 0.0
+    assert diagnostics["critic_target_mean"].item() == 0.0
+    assert diagnostics["critic_td_bootstrap_frac"].item() == 0.0
 
 
 def test_critic_loss_scalar(actor, critic, target_critic, batch):

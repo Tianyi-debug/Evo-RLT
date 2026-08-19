@@ -55,6 +55,8 @@ def test_sample_shapes():
     assert batch["next_ref_flat"].shape == (8, C * ACTION_DIM)
     assert batch["next_proposal_flat"].shape == (8, C * ACTION_DIM)
     assert batch["done"].shape == (8,)
+    assert batch["bootstrap_mask"].shape == (8,)
+    assert batch["cache_semantics_version"].shape == (8,)
     assert batch["source"].shape == (8,)
     assert batch["episode_id"].shape == (8,)
     assert batch["is_critical"].shape == (8,)
@@ -78,7 +80,8 @@ def test_batch_keys():
         "next_proposal_flat", "ref_chunk_flat", "reward_seq", "next_state_vec",
         "next_ref_flat", "done", "actual_steps", "source", "episode_id",
         "is_critical", "intervention", "critic_mask", "actor_q_mask",
-        "actor_bc_mask", "intervention_reason",
+        "actor_bc_mask", "intervention_reason", "bootstrap_mask",
+        "cache_semantics_version",
     }
     assert set(batch.keys()) == expected_keys
 
@@ -97,3 +100,20 @@ def test_sample_keeps_proposal_and_human_bc_target_separate():
     assert torch.equal(batch["proposal_chunk_flat"], torch.zeros(1, C * ACTION_DIM))
     assert torch.equal(batch["ref_chunk_flat"], batch["proposal_chunk_flat"])
     assert torch.equal(batch["bc_target_chunk_flat"], torch.ones(1, C * ACTION_DIM))
+
+
+def test_replay_resolves_legacy_bootstrap_mask_from_done():
+    nonterminal = _make_transition()
+    terminal = _make_transition()
+    terminal.done = torch.tensor(1.0)
+    buf = ReplayBuffer(capacity=2)
+    buf.add(nonterminal)
+    buf.add(terminal)
+
+    batch = buf.sample(2)
+
+    by_done = {
+        float(done.item()): float(mask.item())
+        for done, mask in zip(batch["done"], batch["bootstrap_mask"], strict=True)
+    }
+    assert by_done == {0.0: 1.0, 1.0: 0.0}

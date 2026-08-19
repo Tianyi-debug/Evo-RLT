@@ -6,7 +6,10 @@ from torch.utils.data import DataLoader, Dataset
 
 from evo_rlt.adapters.lerobot.demo_loader import rlt_demo_collate
 from evo_rlt.adapters.lerobot.policies.dataset_rlt_ac import ChunkTransitionDataset
-from evo_rlt.core.interfaces import ChunkTransition
+from evo_rlt.core.interfaces import (
+    TRANSITION_CACHE_SEMANTICS_VERSION,
+    ChunkTransition,
+)
 from evo_rlt.adapters.lerobot.offline_dataset import (
     build_overlap_frame_indices,
     build_transitions_from_demos,
@@ -74,6 +77,50 @@ def test_save_load_transition_cache(tmp_path):
             for j in range(15)
         )
         assert found, f"Loaded state {i} not found in originals"
+
+
+def test_semantic_v2_cache_serializes_explicit_bootstrap_mask_and_version(tmp_path):
+    transition = _make_transitions(1)[0]
+    transition.bootstrap_mask = torch.tensor(0.0)
+    transition.cache_semantics_version = torch.tensor(
+        TRANSITION_CACHE_SEMANTICS_VERSION
+    )
+
+    save_transition_cache([transition], tmp_path, split="train")
+    raw = torch.load(
+        tmp_path / "chunk_transitions_train.pt",
+        weights_only=False,
+        map_location="cpu",
+    )
+
+    assert raw[0]["bootstrap_mask"].item() == 0.0
+    assert raw[0]["cache_semantics_version"].item() == 2
+
+
+def test_semantic_v2_cache_missing_bootstrap_mask_fails_fast(tmp_path):
+    transition = vars(_make_transitions(1)[0]).copy()
+    transition.pop("bootstrap_mask")
+    transition["cache_semantics_version"] = torch.tensor(2)
+    torch.save([transition], tmp_path / "chunk_transitions_train.pt")
+
+    with pytest.raises(ValueError, match="missing required 'bootstrap_mask'"):
+        ChunkTransitionDataset(tmp_path)
+    with pytest.raises(ValueError, match="missing required 'bootstrap_mask'"):
+        load_transition_cache(tmp_path, split="train")
+
+
+def test_legacy_cache_without_bootstrap_mask_remains_readable(tmp_path, caplog):
+    transition = vars(_make_transitions(1)[0]).copy()
+    transition.pop("bootstrap_mask")
+    transition.pop("cache_semantics_version")
+    torch.save([transition], tmp_path / "chunk_transitions_train.pt")
+
+    dataset = ChunkTransitionDataset(tmp_path)
+    buffer = load_transition_cache(tmp_path, split="train")
+
+    assert dataset.cache_semantics_version == 1
+    assert buffer.sample(1)["bootstrap_mask"].item() == 1.0
+    assert "1 - done fallback" in caplog.text
 
 
 def test_chunk_transition_dataset_injects_stable_cache_index_without_mutation(tmp_path):

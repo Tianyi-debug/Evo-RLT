@@ -9,6 +9,8 @@ from evo_rlt.core.interfaces import (
     ACTOR_BC_MASK,
     ACTOR_Q_MASK,
     ACTUAL_STEPS,
+    BOOTSTRAP_MASK,
+    CACHE_SEMANTICS_VERSION,
     BC_TARGET_CHUNK_FLAT,
     CRITIC_MASK,
     DONE,
@@ -75,6 +77,7 @@ class ReplayBuffer:
             NEXT_STATE_VEC: torch.stack([t.next_state_vec for t in batch]),
             NEXT_REF_FLAT: next_proposal_flat,
             DONE: torch.stack([t.done for t in batch]),
+            BOOTSTRAP_MASK: torch.stack([t.resolved_bootstrap_mask() for t in batch]),
             ACTUAL_STEPS: torch.stack([t.actual_steps for t in batch]),
             SOURCE: torch.stack([t.source for t in batch]),
             EPISODE_ID: torch.stack([t.episode_id for t in batch]),
@@ -84,4 +87,7 @@ class ReplayBuffer:
             ACTOR_Q_MASK: torch.stack([t.actor_q_mask for t in batch]),
             ACTOR_BC_MASK: torch.stack([t.actor_bc_mask for t in batch]),
             "intervention_reason": torch.stack([t.intervention_reason for t in batch]),
+            CACHE_SEMANTICS_VERSION: torch.stack(
+                [t.cache_semantics_version for t in batch]
+            ),
         }

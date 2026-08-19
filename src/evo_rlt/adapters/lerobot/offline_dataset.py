@@ -7,7 +7,13 @@ import torch
 from torch.utils.data import DataLoader, Subset
 
 from evo_rlt.adapters.lerobot.demo_loader import RLTDemoDataset, rlt_demo_collate
-from evo_rlt.core.interfaces import ChunkTransition, Observation
+from evo_rlt.core.interfaces import (
+    LEGACY_TRANSITION_CACHE_SEMANTICS_VERSION,
+    TRANSITION_CACHE_SEMANTICS_VERSION,
+    ChunkTransition,
+    Observation,
+    validate_transition_cache_semantics,
+)
 from evo_rlt.core.replay_buffer import ReplayBuffer
 from evo_rlt.core.rewards import build_reward_seq
 
@@ -159,6 +165,7 @@ def _encoded_to_transitions(
             state_vec=s, exec_chunk=e, ref_chunk=r, reward_seq=rew,
             next_state_vec=ns, next_ref_chunk=nr,
             done=torch.tensor(float(is_terminal)),
+            bootstrap_mask=torch.tensor(float(not is_terminal)),
             intervention=torch.tensor(0.0),
             actual_steps=torch.tensor(chunk_length),
             source=torch.tensor(source),
@@ -167,6 +174,7 @@ def _encoded_to_transitions(
             proposal_chunk=r,
             bc_target_chunk=r,
             next_proposal_chunk=nr,
+            cache_semantics_version=torch.tensor(TRANSITION_CACHE_SEMANTICS_VERSION),
         ))
     if episode_success and transitions and not any(t.done.item() == 1.0 for t in transitions):
         raise ValueError(
@@ -299,6 +307,16 @@ def save_transition_cache(
     transition_cache_dir = Path(transition_cache_dir)
     transition_cache_dir.mkdir(parents=True, exist_ok=True)
     path = transition_cache_dir / f"chunk_transitions_{split}.pt"
+    for index, transition in enumerate(transitions):
+        version = int(torch.as_tensor(transition.cache_semantics_version).item())
+        if (
+            version >= TRANSITION_CACHE_SEMANTICS_VERSION
+            and transition.bootstrap_mask is None
+        ):
+            raise ValueError(
+                f"transition {index} declares semantic-v{version} but has no explicit "
+                "bootstrap_mask"
+            )
     data = [
         {
             "state_vec": t.state_vec, "exec_chunk": t.exec_chunk,
@@ -308,6 +326,7 @@ def save_transition_cache(
             "bc_target_chunk": t.bc_target_chunk,
             "next_proposal_chunk": t.next_proposal_chunk,
             "done": t.done, "intervention": t.intervention,
+            "bootstrap_mask": t.resolved_bootstrap_mask(),
             "actual_steps": t.actual_steps,
             "source": t.source,
             "episode_id": t.episode_id,
@@ -316,9 +335,11 @@ def save_transition_cache(
             "actor_q_mask": t.actor_q_mask,
             "actor_bc_mask": t.actor_bc_mask,
             "intervention_reason": t.intervention_reason,
+            "cache_semantics_version": t.cache_semantics_version,
         }
         for t in transitions
     ]
+    validate_transition_cache_semantics(data, cache_name=str(path))
     tmp = path.with_name(f".{path.name}.tmp")
     torch.save(data, tmp)
     tmp.replace(path)
@@ -331,6 +352,14 @@ def load_transition_cache(
     """Load a chunk-transition cache into a replay buffer."""
     path = Path(transition_cache_dir) / f"chunk_transitions_{split}.pt"
     data = torch.load(path, weights_only=False)
+    version = validate_transition_cache_semantics(data, cache_name=str(path))
+    if version == LEGACY_TRANSITION_CACHE_SEMANTICS_VERSION:
+        logger.warning(
+            "Loaded legacy semantic-v1 transition cache %s; missing bootstrap_mask "
+            "uses the compatible 1 - done fallback. Rebuild the cache for explicit "
+            "authority-boundary semantics.",
+            path,
+        )
     buf = ReplayBuffer(capacity=capacity)
     for d in data:
         buf.add(ChunkTransition(**d))

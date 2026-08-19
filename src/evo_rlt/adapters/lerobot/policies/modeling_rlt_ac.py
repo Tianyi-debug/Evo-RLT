@@ -334,6 +334,8 @@ class ChunkACPolicy(PreTrainedPolicy):
             "actor_q_mask",
             "actor_bc_mask",
             "intervention_reason",
+            "bootstrap_mask",
+            "cache_semantics_version",
         ):
             if key in batch:
                 value = batch[key]

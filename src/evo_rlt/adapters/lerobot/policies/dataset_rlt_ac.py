@@ -9,6 +9,11 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
+from evo_rlt.core.interfaces import (
+    LEGACY_TRANSITION_CACHE_SEMANTICS_VERSION,
+    validate_transition_cache_semantics,
+)
+
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +58,8 @@ class ChunkTransitionDataset(Dataset):
       done           ()
       intervention   ()
       actual_steps   ()
+      bootstrap_mask () -- required by semantic-v2 caches
+      cache_semantics_version ()
       (optional) source, episode_id, is_critical, critic_mask, actor_q_mask,
       actor_bc_mask, intervention_reason
 
@@ -80,6 +87,17 @@ class ChunkTransitionDataset(Dataset):
         )
         if not self._transitions:
             raise ValueError(f"empty cache at {path}")
+        self.cache_semantics_version = validate_transition_cache_semantics(
+            self._transitions,
+            cache_name=str(path),
+        )
+        if self.cache_semantics_version == LEGACY_TRANSITION_CACHE_SEMANTICS_VERSION:
+            log.warning(
+                "Loaded legacy semantic-v1 transition cache %s; TD bootstrap uses "
+                "the compatible 1 - done fallback. Rebuild it before training typed "
+                "authority-boundary credit semantics.",
+                path,
+            )
         self.source_counts = self._count_sources(range(len(self._transitions)))
         self._sample_indices = self._build_sample_indices(
             training_stage=training_stage,

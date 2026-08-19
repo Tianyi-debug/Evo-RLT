@@ -4,6 +4,7 @@ import torch
 
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
+from evo_rlt.core.interfaces import TRANSITION_CACHE_SEMANTICS_VERSION
 from evo_rlt.core.utils import compute_discount_vector
 
 
@@ -98,6 +99,42 @@ def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     return (per_sample * weights).sum() / weights.sum().clamp_min(1.0)
 
 
+def resolve_td_bootstrap_mask(
+    batch: dict[str, torch.Tensor], done: torch.Tensor
+) -> torch.Tensor:
+    """Resolve the Bellman bootstrap gate with strict semantic-v2 validation.
+
+    Legacy caches did not store ``bootstrap_mask`` and used ``1 - done``. New
+    semantic-v2 caches must provide the independent gate explicitly so a
+    control-authority boundary cannot silently revert to the legacy behavior.
+    """
+    bootstrap_mask = batch.get("bootstrap_mask")
+    cache_version = batch.get("cache_semantics_version")
+    if bootstrap_mask is None:
+        if cache_version is not None and bool(
+            (cache_version.reshape(-1).to(done.device) >= TRANSITION_CACHE_SEMANTICS_VERSION)
+            .any()
+            .item()
+        ):
+            raise KeyError(
+                "semantic-v2 transition cache requires batch['bootstrap_mask']; "
+                "refusing to fall back silently"
+            )
+        return 1.0 - done.to(torch.float32)
+
+    gate = bootstrap_mask.reshape(-1).to(device=done.device, dtype=torch.float32)
+    if gate.numel() != done.reshape(-1).numel():
+        raise ValueError(
+            "bootstrap_mask must have one value per transition: "
+            f"mask={gate.numel()} done={done.reshape(-1).numel()}"
+        )
+    if bool(((gate < 0.0) | (gate > 1.0)).any().item()):
+        raise ValueError("bootstrap_mask values must lie within [0, 1]")
+    if bool(((done.reshape(-1).to(gate.device) > 0.5) & (gate > 0.0)).any().item()):
+        raise ValueError("real terminal transitions must have bootstrap_mask=0")
+    return gate
+
+
 def critic_loss_with_diagnostics(
     critic: TwinCritic,
     target_critic: TwinCritic,
@@ -124,6 +161,7 @@ def critic_loss_with_diagnostics(
     reward_seq = batch["reward_seq"]
     done = batch["done"]
     actual_steps = batch.get("actual_steps")
+    td_bootstrap_mask = resolve_td_bootstrap_mask(batch, done)
 
     with torch.no_grad():
         # Use deterministic mean for target action (TD3-style), clamped to [-1,1]
@@ -139,7 +177,7 @@ def critic_loss_with_diagnostics(
             bootstrap_exp = actual_steps.unsqueeze(-1).float()
         else:
             bootstrap_exp = torch.full_like(done.unsqueeze(-1), C, dtype=torch.float32)
-        bootstrap = (gamma ** bootstrap_exp) * (1.0 - done.unsqueeze(-1)) * q_next
+        bootstrap = (gamma ** bootstrap_exp) * td_bootstrap_mask.unsqueeze(-1) * q_next
         target = r + bootstrap
 
     q1, q2 = critic(x, a)
@@ -200,6 +238,7 @@ def critic_loss_with_diagnostics(
         "critic_bootstrap_q2_frac": q2_mask.float().mean(),
         "critic_bootstrap_overlap_frac": (q1_mask & q2_mask).float().mean(),
         "critic_bootstrap_union_frac": (q1_mask | q2_mask).float().mean(),
+        "critic_td_bootstrap_frac": td_bootstrap_mask.mean(),
     }
     return loss, diagnostics
 

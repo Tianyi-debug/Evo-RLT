@@ -885,6 +885,13 @@ def _encoded_episode_to_transitions(
         transition.source = torch.tensor(source)
         transition.intervention = torch.tensor(float(human_override))
         reason = int(INTERVENTION_REASON_NONE)
+        if human_override:
+            # Human-controlled samples never enter either TD or actor-Q. The
+            # independent bootstrap gate is also zero even for legacy datasets
+            # that have no typed intervention_reason metadata.
+            transition.critic_mask = torch.tensor(0.0)
+            transition.actor_q_mask = torch.tensor(0.0)
+            transition.bootstrap_mask = torch.tensor(0.0)
         if provenance.intervention_reason is not None:
             if human_override:
                 reason = _intervention_reason_for_chunk(
@@ -892,10 +899,6 @@ def _encoded_episode_to_transitions(
                     start_frame,
                     chunk_length,
                 )
-                # Human actions provide BC supervision, but must not train the
-                # critic or actor-Q objective using an assisted terminal reward.
-                transition.critic_mask = torch.tensor(0.0)
-                transition.actor_q_mask = torch.tensor(0.0)
             else:
                 reason = policy_reason_by_frame.get(
                     start_frame,
@@ -904,11 +907,6 @@ def _encoded_episode_to_transitions(
                 run_id = policy_run_by_frame.get(start_frame)
                 if run_id is not None:
                     policy_run_by_anchor[start_frame] = run_id
-                if reason == int(INTERVENTION_REASON_PROACTIVE):
-                    # A planned takeover censors the preceding policy prefix:
-                    # it is neither a success nor evidence of policy failure.
-                    transition.critic_mask = torch.tensor(0.0)
-                    transition.actor_q_mask = torch.tensor(0.0)
         transition.intervention_reason = torch.tensor(reason, dtype=torch.long)
         # Never overwrite proposal/ref: training and deployment must condition
         # on the same independently generated VLA action. Only the BC target is
@@ -928,19 +926,22 @@ def _encoded_episode_to_transitions(
 
     anchor_to_index = {anchor: index for index, anchor in enumerate(start_anchors)}
 
-    corrective_terminal_by_run: dict[int, int] = {}
+    authority_boundary_by_run: dict[int, int] = {}
     for transition, start_frame in zip(transitions, start_anchors, strict=True):
         if not usable_by_anchor[start_frame]:
             continue
-        if int(transition.intervention_reason.item()) != int(INTERVENTION_REASON_CORRECTIVE):
+        if int(transition.intervention_reason.item()) not in {
+            int(INTERVENTION_REASON_CORRECTIVE),
+            int(INTERVENTION_REASON_PROACTIVE),
+        }:
             continue
         if int(transition.source.item()) == TRANSITION_SOURCE_HUMAN_OVERRIDE:
             continue
         run_id = policy_run_by_anchor.get(start_frame)
         if run_id is not None:
-            corrective_terminal_by_run[run_id] = max(
+            authority_boundary_by_run[run_id] = max(
                 start_frame,
-                corrective_terminal_by_run.get(run_id, start_frame),
+                authority_boundary_by_run.get(run_id, start_frame),
             )
 
     should_filter = (
@@ -960,16 +961,23 @@ def _encoded_episode_to_transitions(
         if not usable_by_anchor[start_frame]:
             continue
         run_id = policy_run_by_anchor.get(start_frame)
-        corrective_terminal = (
+        authority_boundary = (
             run_id is not None
-            and corrective_terminal_by_run.get(run_id) == start_frame
+            and authority_boundary_by_run.get(run_id) == start_frame
         )
-        if corrective_terminal:
-            # End the autonomous Bellman chain before human control.  The
-            # policy prefix remains useful negative critic evidence, but can no
-            # longer inherit the later human-assisted success reward.
-            transition.done = torch.tensor(1.0)
-            transition.reward_seq = torch.zeros_like(transition.reward_seq)
+        if authority_boundary:
+            # This is a control-authority censor, not an environment terminal or
+            # an observed task failure. Stop bootstrap into the human-controlled
+            # next state, and exclude the unknown outcome target entirely. Earlier
+            # autonomous transitions in the run retain ordinary TD supervision.
+            if bool(transition.done.item()):
+                raise RuntimeError(
+                    "Authority-boundary transition unexpectedly coincides with a real "
+                    f"episode terminal at frame {start_frame}"
+                )
+            transition.bootstrap_mask = torch.tensor(0.0)
+            transition.critic_mask = torch.tensor(0.0)
+            transition.actor_q_mask = torch.tensor(0.0)
             filtered.append(transition)
             continue
         next_index = anchor_to_index.get(start_frame + chunk_length)
