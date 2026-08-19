@@ -6,8 +6,11 @@ from collections import deque
 import torch
 
 from evo_rlt.core.interfaces import (
+    ACTOR_BC_MASK,
+    ACTOR_Q_MASK,
     ACTUAL_STEPS,
     BC_TARGET_CHUNK_FLAT,
+    CRITIC_MASK,
     DONE,
     EPISODE_ID,
     EXEC_CHUNK_FLAT,
@@ -77,4 +80,8 @@ class ReplayBuffer:
             EPISODE_ID: torch.stack([t.episode_id for t in batch]),
             IS_CRITICAL: torch.stack([t.is_critical for t in batch]),
             INTERVENTION: torch.stack([t.intervention for t in batch]),
+            CRITIC_MASK: torch.stack([t.critic_mask for t in batch]),
+            ACTOR_Q_MASK: torch.stack([t.actor_q_mask for t in batch]),
+            ACTOR_BC_MASK: torch.stack([t.actor_bc_mask for t in batch]),
+            "intervention_reason": torch.stack([t.intervention_reason for t in batch]),
         }

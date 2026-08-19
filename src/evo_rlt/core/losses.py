@@ -237,9 +237,11 @@ def actor_loss_with_diagnostics(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Q-maximization plus BC toward an independently selected target.
 
-    The actor always receives the VLA proposal. Autonomous chunks use that
-    proposal as their BC target; HIL chunks can instead use the executed human
-    correction. Uses deterministic mean (not noisy samples) for stability.
+    The actor always receives the VLA proposal. The cache independently selects
+    the BC target and can use ``actor_bc_mask`` to exclude transitions whose
+    executed action must not be cloned (for example failed autonomous rollouts
+    or policy prefixes preceding a corrective takeover). Uses deterministic
+    mean (not noisy samples) for stability.
     BC term is the per-sample squared distance summed across action dims, then
     averaged over the batch — matching the paper's β-scaling convention. This
     differs from mean-MSE by a factor of C*D_flat. An optional conservative
@@ -304,14 +306,19 @@ def actor_loss_with_diagnostics(
         else bc_target_raw
     )
     bc_per_sample = ((mu - bc_target) ** 2).sum(dim=-1)
+    actor_bc_mask = batch.get("actor_bc_mask")
+    if actor_bc_mask is None:
+        actor_bc_valid = torch.ones_like(bc_per_sample, dtype=torch.bool)
+    else:
+        actor_bc_valid = actor_bc_mask.reshape(-1).to(bc_per_sample.device) > 0.5
     actor_q_mask = batch.get("actor_q_mask")
     if actor_q_mask is None:
         actor_q_valid = torch.ones_like(q, dtype=torch.bool)
     else:
         actor_q_valid = actor_q_mask.reshape(-1).to(q.device) > 0.5
     q_loss = -_masked_mean(q, actor_q_valid)
-    bc_raw = bc_per_sample.mean()
-    bc_weighted = (beta_per_sample * bc_per_sample).mean()
+    bc_raw = _masked_mean(bc_per_sample, actor_bc_valid)
+    bc_weighted = _masked_mean(beta_per_sample * bc_per_sample, actor_bc_valid)
 
     source = batch.get("source")
     if source is not None:
@@ -330,6 +337,10 @@ def actor_loss_with_diagnostics(
                 "behavior preservation requires batch['exec_chunk_flat']"
             )
         behavior_mask = source == 2
+        # Outcome-aware caches use the same mask to prevent the optional
+        # behavior-preservation term from re-introducing BC on failed policy
+        # actions that the primary BC objective deliberately excludes.
+        behavior_mask = behavior_mask & actor_bc_valid
         intervention_reason = batch.get("intervention_reason")
         if intervention_reason is not None:
             reason = intervention_reason.detach().reshape(-1).to(source.device)
@@ -368,7 +379,10 @@ def actor_loss_with_diagnostics(
         "actor_ref_rmse": (
             (mu.detach() - proposal.detach().clamp(-1.0, 1.0)) ** 2
         ).mean().sqrt(),
-        "actor_bc_target_rmse": ((mu.detach() - bc_target.detach()) ** 2).mean().sqrt(),
+        "actor_bc_target_rmse": _masked_mean(
+            (mu.detach() - bc_target.detach()).square().mean(dim=-1),
+            actor_bc_valid,
+        ).sqrt(),
         "actor_disagreement_mean": disagreement.mean(),
         "actor_disagreement_p50": torch.quantile(disagreement, 0.50),
         "actor_disagreement_p90": torch.quantile(disagreement, 0.90),
@@ -381,6 +395,7 @@ def actor_loss_with_diagnostics(
         "actor_beta_min": beta_per_sample.min(),
         "actor_beta_max": beta_per_sample.max(),
         "actor_q_valid_frac": actor_q_valid.float().mean(),
+        "actor_bc_valid_frac": actor_bc_valid.float().mean(),
     }
 
     if source is not None:
@@ -390,6 +405,9 @@ def actor_loss_with_diagnostics(
             if bool(mask.any()):
                 diagnostics[f"source_{source_id}_disagreement_mean"] = disagreement[mask].mean()
                 diagnostics[f"source_{source_id}_beta_mean"] = beta_per_sample[mask].mean()
+                diagnostics[f"source_{source_id}_actor_bc_valid_frac"] = (
+                    actor_bc_valid[mask].float().mean()
+                )
 
     intervention = batch.get("intervention")
     if source is not None:

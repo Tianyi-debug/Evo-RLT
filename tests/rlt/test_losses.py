@@ -152,6 +152,35 @@ def test_actor_q_mask_keeps_human_bc_but_excludes_human_q():
     assert diagnostics["actor_q_valid_frac"].item() == pytest.approx(0.5)
 
 
+def test_actor_bc_mask_excludes_failed_behavior_from_supervision():
+    class StubActor:
+        action_residual = False
+
+        def forward(self, state_vec, proposal, training=False):
+            return torch.zeros_like(proposal), torch.zeros_like(proposal)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            q = torch.zeros(state_vec.shape[0], 1)
+            return q, q
+
+    batch = {
+        "state_vec": torch.zeros(2, 1),
+        "proposal_chunk_flat": torch.zeros(2, 1),
+        "bc_target_chunk_flat": torch.tensor([[1.0], [100.0]]),
+        "actor_bc_mask": torch.tensor([1.0, 0.0]),
+    }
+
+    loss, diagnostics = actor_loss_with_diagnostics(
+        StubActor(), StubCritic(), batch, beta=1.0, q_weight=0.0
+    )
+
+    assert loss.item() == pytest.approx(1.0)
+    assert diagnostics["loss_actor_bc_raw"].item() == pytest.approx(1.0)
+    assert diagnostics["actor_bc_target_rmse"].item() == pytest.approx(1.0)
+    assert diagnostics["actor_bc_valid_frac"].item() == pytest.approx(0.5)
+
+
 def test_source2_behavior_preservation_uses_exec_and_excludes_assisted_prefixes():
     class StubActor:
         action_residual = False
@@ -170,6 +199,7 @@ def test_source2_behavior_preservation_uses_exec_and_excludes_assisted_prefixes(
         "bc_target_chunk_flat": torch.zeros(3, 2),
         "exec_chunk_flat": torch.tensor([[1.0, 0.0], [10.0, 0.0], [5.0, 0.0]]),
         "source": torch.tensor([2, 2, 3]),
+        "actor_bc_mask": torch.tensor([1.0, 0.0, 1.0]),
         "intervention_reason": torch.tensor([0, 1, 0]),
     }
 
@@ -210,6 +240,42 @@ def test_behavior_preservation_zero_is_backward_compatible(actor, critic, batch)
     assert original_info.keys() == explicit_info.keys()
     assert explicit_info["loss_actor_behavior_bc_raw"].item() == 0.0
     assert explicit_info["actor_behavior_sample_frac"].item() == 0.0
+
+
+def test_behavior_preservation_respects_actor_bc_mask():
+    class StubActor:
+        action_residual = False
+
+        def forward(self, state_vec, proposal, training=False):
+            return torch.zeros_like(proposal), torch.zeros_like(proposal)
+
+    class StubCritic:
+        def __call__(self, state_vec, action):
+            q = torch.zeros(state_vec.shape[0], 1)
+            return q, q
+
+    batch = {
+        "state_vec": torch.zeros(1, 1),
+        "proposal_chunk_flat": torch.zeros(1, 1),
+        "bc_target_chunk_flat": torch.ones(1, 1),
+        "exec_chunk_flat": torch.ones(1, 1),
+        "source": torch.tensor([2]),
+        "actor_bc_mask": torch.tensor([0.0]),
+        "intervention_reason": torch.tensor([0]),
+    }
+
+    loss, diagnostics = actor_loss_with_diagnostics(
+        StubActor(),
+        StubCritic(),
+        batch,
+        beta=1.0,
+        q_weight=0.0,
+        behavior_preservation_weight=1.0,
+    )
+
+    assert loss.item() == pytest.approx(0.0)
+    assert diagnostics["actor_bc_valid_frac"].item() == pytest.approx(0.0)
+    assert diagnostics["actor_behavior_sample_frac"].item() == pytest.approx(0.0)
 
 
 def test_zero_q_weight_removes_q_term_but_keeps_supervised_bc():

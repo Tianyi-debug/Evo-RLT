@@ -240,6 +240,120 @@ def test_transition_cache_v2_demo_executed_mode_with_zero_provenance():
     assert torch.equal(transitions[0].bc_target_chunk, exec_chunks[0])
 
 
+def test_outcome_aware_actor_bc_uses_executed_demo_target():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    ref_chunks = torch.full((3, 2, 2), 0.25)
+    exec_chunks = torch.full((3, 2, 2), -0.5)
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.randn(3, 4),
+        ref_chunks=ref_chunks,
+        exec_chunks=exec_chunks,
+        frame_indices=[0, 1, 2],
+        episode_last_frame=2,
+        chunk_length=2,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=10,
+        actor_bc_mode="outcome-aware",
+    )
+
+    assert len(transitions) == 1
+    assert transitions[0].source.item() == module.TRANSITION_SOURCE_DEMO
+    assert transitions[0].actor_bc_mask.item() == 1.0
+    assert torch.equal(transitions[0].proposal_chunk, ref_chunks[0])
+    assert torch.equal(transitions[0].bc_target_chunk, exec_chunks[0])
+
+
+@pytest.mark.parametrize(
+    ("episode_success", "expected_mask"),
+    [(True, 1.0), (False, 0.0)],
+)
+def test_outcome_aware_actor_bc_clones_only_successful_autonomous_episodes(
+    episode_success,
+    expected_mask,
+):
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    frame_indices = [0, 1, 2]
+    ref_chunks = torch.full((3, 2, 2), 0.25)
+    exec_chunks = torch.full((3, 2, 2), -0.5)
+    provenance = module.FrameProvenance(
+        is_intervention=torch.zeros(3),
+        collector_policy_id=torch.full((3,), 2),
+        intervention_stage=torch.zeros(3),
+        intervention_reason=torch.zeros(3, dtype=torch.long),
+    )
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.randn(3, 4),
+        ref_chunks=ref_chunks,
+        exec_chunks=exec_chunks,
+        frame_indices=frame_indices,
+        episode_last_frame=2,
+        chunk_length=2,
+        frame_stride=1,
+        episode_success=episode_success,
+        ep_id=11,
+        provenance=provenance,
+        actor_bc_mode="outcome-aware",
+    )
+
+    assert len(transitions) == 1
+    assert transitions[0].source.item() == module.TRANSITION_SOURCE_RL_AUTONOMOUS
+    assert transitions[0].actor_bc_mask.item() == expected_mask
+    expected_target = exec_chunks[0] if episode_success else ref_chunks[0]
+    assert torch.equal(transitions[0].bc_target_chunk, expected_target)
+
+
+def test_outcome_aware_actor_bc_masks_policy_prefix_in_assisted_success():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+
+    frame_indices = list(range(12))
+    ref_chunks = torch.full((12, 2, 2), 0.25)
+    exec_chunks = torch.full((12, 2, 2), -0.5)
+    provenance = module.FrameProvenance(
+        is_intervention=torch.tensor(
+            [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0], dtype=torch.float32
+        ),
+        collector_policy_id=torch.tensor([2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 2]),
+        intervention_stage=torch.tensor(
+            [0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 3], dtype=torch.float32
+        ),
+        intervention_reason=torch.tensor([0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1]),
+    )
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.randn(12, 4),
+        ref_chunks=ref_chunks,
+        exec_chunks=exec_chunks,
+        frame_indices=frame_indices,
+        episode_last_frame=11,
+        chunk_length=2,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=12,
+        provenance=provenance,
+        actor_bc_mode="outcome-aware",
+    )
+
+    policy = [
+        transition
+        for transition in transitions
+        if int(transition.source.item()) == module.TRANSITION_SOURCE_RL_AUTONOMOUS
+    ]
+    human = [
+        transition
+        for transition in transitions
+        if int(transition.source.item()) == module.TRANSITION_SOURCE_HUMAN_OVERRIDE
+    ]
+    assert policy and human
+    assert all(transition.actor_bc_mask.item() == 0.0 for transition in policy)
+    assert all(transition.actor_bc_mask.item() == 1.0 for transition in human)
+    assert all(
+        torch.equal(transition.bc_target_chunk, transition.exec_chunk)
+        for transition in human
+    )
+
+
 def test_transition_cache_v2_semantic_builder_zero_reward_on_failure():
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 
@@ -383,6 +497,8 @@ def test_transition_cache_v2_summary_audits_demo_expert_reachability():
     assert "demo_vla_action_rmse=0.500000" in summary
     assert "demo_vla_action_abs_max=0.500000" in summary
     assert "demo_target_outside_residual_bound_frac=1.000000" in summary
+    assert "actor_bc_valid=1/1" in summary
+    assert "actor_bc_valid_sources={0: 1}" in summary
 
 
 def test_transition_cache_v2_drop_legacy_handoff_and_invalid_bootstrap():

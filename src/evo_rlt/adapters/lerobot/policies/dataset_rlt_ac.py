@@ -53,7 +53,8 @@ class ChunkTransitionDataset(Dataset):
       done           ()
       intervention   ()
       actual_steps   ()
-      (optional) source, episode_id, is_critical
+      (optional) source, episode_id, is_critical, critic_mask, actor_q_mask,
+      actor_bc_mask, intervention_reason
 
     The stored fields are returned unchanged and a stable `cache_index` is
     injected from the sample position. Flattening for `exec_chunk_flat` /

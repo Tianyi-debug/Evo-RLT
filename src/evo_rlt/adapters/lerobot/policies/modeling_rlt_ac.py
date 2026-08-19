@@ -332,6 +332,7 @@ class ChunkACPolicy(PreTrainedPolicy):
             "cache_index",
             "critic_mask",
             "actor_q_mask",
+            "actor_bc_mask",
             "intervention_reason",
         ):
             if key in batch:

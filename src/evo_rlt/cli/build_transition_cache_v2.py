@@ -187,6 +187,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--actor-bc-mode",
+        choices=["legacy", "outcome-aware"],
+        default="legacy",
+        help=(
+            "Actor BC target/mask semantics stored in the cache. 'legacy' uses "
+            "--demo-reference-mode/--human-reference-mode and applies BC to every "
+            "transition. 'outcome-aware' uses recorded actions for demo and human "
+            "chunks, uses recorded actions only for successful fully autonomous "
+            "policy episodes, and masks actor BC on failed or assisted policy "
+            "chunks. The VLA proposal remains the actor input/residual base."
+        ),
+    )
+    p.add_argument(
         "--legacy-handoff-policy",
         choices=["majority", "drop"],
         default="majority",
@@ -225,6 +238,48 @@ class FrameProvenance:
     collector_policy_id: Tensor
     intervention_stage: Tensor | None = None
     intervention_reason: Tensor | None = None
+
+
+def _apply_actor_bc_semantics(
+    transitions: list[ChunkTransition],
+    *,
+    mode: str,
+    episode_success: bool,
+    episode_has_human: bool,
+) -> list[ChunkTransition]:
+    """Select actor BC targets without changing critic or actor-Q credit.
+
+    Outcome-aware semantics preserve expert and human supervision while cloning
+    autonomous behavior only when the whole episode completed successfully
+    without human assistance. Failed autonomous actions and policy prefixes in
+    assisted episodes remain available to the critic but cannot move the actor
+    through BC.
+    """
+    if mode == "legacy":
+        return transitions
+    if mode != "outcome-aware":
+        raise ValueError(f"unsupported actor BC mode: {mode!r}")
+
+    autonomous_sources = {
+        TRANSITION_SOURCE_WARMUP_VLA,
+        TRANSITION_SOURCE_RL_AUTONOMOUS,
+    }
+    autonomous_bc_valid = bool(episode_success and not episode_has_human)
+    for transition in transitions:
+        source = int(transition.source.item())
+        if source in {TRANSITION_SOURCE_DEMO, TRANSITION_SOURCE_HUMAN_OVERRIDE}:
+            transition.bc_target_chunk = transition.exec_chunk.clone()
+            transition.actor_bc_mask = torch.tensor(1.0)
+        elif source in autonomous_sources:
+            transition.bc_target_chunk = (
+                transition.exec_chunk.clone()
+                if autonomous_bc_valid
+                else transition.proposal_chunk.clone()
+            )
+            transition.actor_bc_mask = torch.tensor(float(autonomous_bc_valid))
+        else:
+            raise ValueError(f"unsupported transition source for actor BC: {source}")
+    return transitions
 
 
 def _log(msg: str) -> None:
@@ -760,6 +815,7 @@ def _encoded_episode_to_transitions(
     demo_reference_mode: str = "vla",
     human_reference_mode: str = "executed",
     legacy_handoff_policy: str = "majority",
+    actor_bc_mode: str = "legacy",
 ) -> list[ChunkTransition]:
     if not (state_vecs.shape[0] == ref_chunks.shape[0] == exec_chunks.shape[0] == len(frame_indices)):
         raise ValueError(
@@ -786,7 +842,19 @@ def _encoded_episode_to_transitions(
         if demo_reference_mode == "executed":
             for transition in transitions:
                 transition.bc_target_chunk = transition.exec_chunk.clone()
-        return transitions
+        return _apply_actor_bc_semantics(
+            transitions,
+            mode=actor_bc_mode,
+            episode_success=episode_success,
+            episode_has_human=False,
+        )
+
+    episode_start_frame = min(frame_indices)
+    episode_has_human = bool(
+        (provenance.is_intervention[episode_start_frame : episode_last_frame + 1] > 0.5)
+        .any()
+        .item()
+    )
 
     start_anchors = [
         frame
@@ -880,7 +948,12 @@ def _encoded_episode_to_transitions(
         or legacy_handoff_policy == "drop"
     )
     if not should_filter:
-        return transitions
+        return _apply_actor_bc_semantics(
+            transitions,
+            mode=actor_bc_mode,
+            episode_success=episode_success,
+            episode_has_human=episode_has_human,
+        )
 
     filtered: list[ChunkTransition] = []
     for transition, start_frame in zip(transitions, start_anchors, strict=True):
@@ -909,7 +982,12 @@ def _encoded_episode_to_transitions(
             # handoff state.
             continue
         filtered.append(transition)
-    return filtered
+    return _apply_actor_bc_semantics(
+        filtered,
+        mode=actor_bc_mode,
+        episode_success=episode_success,
+        episode_has_human=episode_has_human,
+    )
 
 
 def _encode_episode(
@@ -935,6 +1013,7 @@ def _encode_episode(
     demo_reference_mode: str,
     human_reference_mode: str,
     legacy_handoff_policy: str,
+    actor_bc_mode: str,
 ) -> list[ChunkTransition]:
     """Encode sampled episode frames and build paper-style C-step transitions."""
     if not frame_indices:
@@ -997,6 +1076,7 @@ def _encode_episode(
         demo_reference_mode=demo_reference_mode,
         human_reference_mode=human_reference_mode,
         legacy_handoff_policy=legacy_handoff_policy,
+        actor_bc_mode=actor_bc_mode,
     )
 
 
@@ -1020,6 +1100,8 @@ def _transition_summary(
     demo_samples = 0
     critic_valid = 0
     actor_q_valid = 0
+    actor_bc_valid = 0
+    actor_bc_valid_sources: dict[int, int] = {}
     corrective_transitions = 0
     proactive_transitions = 0
     for transition in transitions:
@@ -1027,6 +1109,9 @@ def _transition_summary(
         source_counts[source] = source_counts.get(source, 0) + 1
         critic_valid += int(float(transition.critic_mask.item()) > 0.5)
         actor_q_valid += int(float(transition.actor_q_mask.item()) > 0.5)
+        bc_is_valid = int(float(transition.actor_bc_mask.item()) > 0.5)
+        actor_bc_valid += bc_is_valid
+        actor_bc_valid_sources[source] = actor_bc_valid_sources.get(source, 0) + bc_is_valid
         reason = int(transition.intervention_reason.item())
         corrective_transitions += int(reason == int(INTERVENTION_REASON_CORRECTIVE))
         proactive_transitions += int(reason == int(INTERVENTION_REASON_PROACTIVE))
@@ -1068,6 +1153,8 @@ def _transition_summary(
         f"sources={dict(sorted(source_counts.items()))} "
         f"critic_valid={critic_valid}/{len(transitions)} "
         f"actor_q_valid={actor_q_valid}/{len(transitions)} "
+        f"actor_bc_valid={actor_bc_valid}/{len(transitions)} "
+        f"actor_bc_valid_sources={dict(sorted(actor_bc_valid_sources.items()))} "
         f"corrective_labeled={corrective_transitions} "
         f"proactive_labeled={proactive_transitions} "
         f"terminal_success={success_terminal} terminal_failure={failure_terminal} "
@@ -1168,6 +1255,9 @@ def main() -> None:
         dataset,
         args.provenance_mode,
         args.missing_intervention_reason,
+    )
+    _log(
+        f"actor BC mode={args.actor_bc_mode}; proposal remains the actor input/residual base"
     )
     n_episodes = dataset.num_episodes
     if args.max_episodes is not None:
@@ -1291,6 +1381,7 @@ def main() -> None:
                     demo_reference_mode=args.demo_reference_mode,
                     human_reference_mode=args.human_reference_mode,
                     legacy_handoff_policy=args.legacy_handoff_policy,
+                    actor_bc_mode=args.actor_bc_mode,
                 )
                 raw_transition_count = sum(
                     1

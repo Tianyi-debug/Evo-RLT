@@ -32,6 +32,7 @@ IS_CRITICAL = "is_critical"
 INTERVENTION = "intervention"
 CRITIC_MASK = "critic_mask"
 ACTOR_Q_MASK = "actor_q_mask"
+ACTOR_BC_MASK = "actor_bc_mask"
 
 
 @dataclass
@@ -59,9 +60,9 @@ class ChunkTransition:
 
     ``proposal_chunk`` is the VLA action used as actor input and residual base.
     ``exec_chunk`` is the action actually executed and is used by the critic.
-    ``bc_target_chunk`` is normally the proposal, but becomes the executed
-    human action for intervention chunks. ``ref_chunk`` and ``next_ref_chunk``
-    are deprecated compatibility aliases for old caches.
+    ``bc_target_chunk`` is selected independently by the cache semantics and
+    can be excluded from actor BC with ``actor_bc_mask``. ``ref_chunk`` and
+    ``next_ref_chunk`` are deprecated compatibility aliases for old caches.
     """
 
     state_vec: torch.Tensor  # (state_dim,)
@@ -80,10 +81,11 @@ class ChunkTransition:
     bc_target_chunk: torch.Tensor | None = None
     next_proposal_chunk: torch.Tensor | None = None
     # Per-transition training semantics.  Old caches default to the legacy
-    # behavior where every transition participates in critic and actor-Q
-    # updates.
+    # behavior where every transition participates in critic, actor-Q, and
+    # actor-BC updates.
     critic_mask: torch.Tensor = field(default_factory=lambda: torch.tensor(1.0))
     actor_q_mask: torch.Tensor = field(default_factory=lambda: torch.tensor(1.0))
+    actor_bc_mask: torch.Tensor = field(default_factory=lambda: torch.tensor(1.0))
     intervention_reason: torch.Tensor = field(default_factory=lambda: torch.tensor(0))
 
     def __post_init__(self) -> None:

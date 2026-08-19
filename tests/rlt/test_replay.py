@@ -77,7 +77,8 @@ def test_batch_keys():
         "state_vec", "exec_chunk_flat", "proposal_chunk_flat", "bc_target_chunk_flat",
         "next_proposal_flat", "ref_chunk_flat", "reward_seq", "next_state_vec",
         "next_ref_flat", "done", "actual_steps", "source", "episode_id",
-        "is_critical", "intervention",
+        "is_critical", "intervention", "critic_mask", "actor_q_mask",
+        "actor_bc_mask", "intervention_reason",
     }
     assert set(batch.keys()) == expected_keys
 
