@@ -174,6 +174,20 @@ def test_chunk_transition_dataset_critic_only_keeps_mixed_sampling(tmp_path):
     assert dataset.sampling_source_counts == {0: 6, 2: 6}
 
 
+def test_chunk_transition_dataset_teacher_bc_keeps_semantic_mixture(tmp_path):
+    _write_source_cache(tmp_path, [0] * 6 + [2] * 3 + [3] * 3)
+
+    dataset = ChunkTransitionDataset(
+        tmp_path,
+        training_stage="teacher_bc",
+        source_sampling_weights=[0.5, 0.0, 0.25, 0.25],
+        source_sampling_seed=13,
+    )
+
+    assert len(dataset) == 12
+    assert dataset.sampling_source_counts == {0: 6, 2: 3, 3: 3}
+
+
 def test_chunk_transition_dataset_mixed_source_weights_are_exact_and_deterministic(tmp_path):
     _write_source_cache(tmp_path, [1] * 8 + [2] * 2 + [3] * 2)
 

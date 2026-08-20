@@ -87,9 +87,10 @@ class ChunkACPolicyConfig(PreTrainedConfig):
 
     # --- Offline training stage + source balancing ---
     # ``human_bc`` performs actor-only residual behavior cloning on source=3
-    # transitions. ``critic_only`` updates only the critic/target critic while
-    # keeping the loaded actor bit-identical. ``mixed_ac`` keeps the regular
-    # TD3+BC actor-critic update.
+    # transitions. ``teacher_bc`` performs actor-only human correction BC plus
+    # frozen warmup-actor distillation on semantically safe old-policy states.
+    # ``critic_only`` updates only the critic/target critic while keeping the
+    # loaded actor bit-identical. ``mixed_ac`` keeps the regular TD3+BC update.
     training_stage: str = "mixed_ac"
     # Replay-level source weights ordered as [demo, VLA, RL autonomous, human].
     # The transition dataset realizes these weights with a deterministic virtual
@@ -106,6 +107,12 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     # executed. Assisted prefixes are excluded when intervention_reason is
     # available. Zero preserves the original TD3+BC objective exactly.
     actor_behavior_preservation_weight: float = 0.0
+    # Continual-adaptation control. Only the actor tensors are read from this
+    # AC checkpoint, and the frozen teacher is built lazily on the first
+    # teacher_bc batch. Deployment therefore does not load a second actor.
+    actor_teacher_pretrained_path: str = ""
+    teacher_distillation_weight: float = 1.0
+    human_bc_weight: float = 1.0
 
     # --- Shapes ---
     chunk_length: int = 10
@@ -224,9 +231,15 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 f"critic_bootstrap_seed must be non-negative, got {self.critic_bootstrap_seed}"
             )
-        if self.training_stage not in ("mixed_ac", "human_bc", "critic_only"):
+        if self.training_stage not in (
+            "mixed_ac",
+            "human_bc",
+            "teacher_bc",
+            "critic_only",
+        ):
             raise ValueError(
-                "training_stage must be 'mixed_ac', 'human_bc', or 'critic_only', "
+                "training_stage must be 'mixed_ac', 'human_bc', 'teacher_bc', "
+                "or 'critic_only', "
                 f"got {self.training_stage!r}"
             )
         if self.source_sampling_weights is not None:
@@ -258,6 +271,31 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 f"actor_q_weight must be non-negative, got {self.actor_q_weight}"
             )
+        if self.teacher_distillation_weight < 0:
+            raise ValueError(
+                "teacher_distillation_weight must be non-negative, "
+                f"got {self.teacher_distillation_weight}"
+            )
+        if self.human_bc_weight < 0:
+            raise ValueError(
+                f"human_bc_weight must be non-negative, got {self.human_bc_weight}"
+            )
+        if self.training_stage == "teacher_bc":
+            if not self.actor_teacher_pretrained_path:
+                raise ValueError(
+                    "teacher_bc requires actor_teacher_pretrained_path pointing "
+                    "to the frozen warmup AC pretrained_model directory"
+                )
+            if self.teacher_distillation_weight + self.human_bc_weight <= 0:
+                raise ValueError(
+                    "teacher_bc requires a positive teacher_distillation_weight "
+                    "or human_bc_weight"
+                )
+            if self.actor_q_weight != 0:
+                raise ValueError(
+                    "teacher_bc is an actor-only Q=0 diagnostic stage; set "
+                    "actor_q_weight=0"
+                )
         if (
             self.actor_bc_weight_mode == "disagreement"
             and self.actor_bc_uncertainty_tau_high

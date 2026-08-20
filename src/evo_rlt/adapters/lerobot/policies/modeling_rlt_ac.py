@@ -12,6 +12,7 @@ from typing import Any
 
 import torch
 from torch import Tensor
+from safetensors.torch import load_file as load_safetensors_file
 from typing_extensions import Unpack
 
 from lerobot.policies.pretrained import ActionSelectKwargs, PreTrainedPolicy
@@ -30,6 +31,12 @@ from evo_rlt.core.critic import TwinCritic
 from evo_rlt.core.losses import (
     actor_loss_with_diagnostics,
     critic_loss_with_diagnostics,
+)
+from evo_rlt.core.interfaces import (
+    TRANSITION_SOURCE_DEMO,
+    TRANSITION_SOURCE_HUMAN_OVERRIDE,
+    TRANSITION_SOURCE_RL_AUTONOMOUS,
+    TRANSITION_SOURCE_WARMUP_VLA,
 )
 from evo_rlt.core.phase_controller import PhaseController
 from evo_rlt.core.utils import soft_update
@@ -156,7 +163,7 @@ class ChunkACPolicy(PreTrainedPolicy):
         for p in self.target_critic.parameters():
             p.requires_grad = False
         self.target_critic.eval()
-        if config.training_stage == "human_bc":
+        if config.training_stage in {"human_bc", "teacher_bc"}:
             for p in self.critic.parameters():
                 p.requires_grad = False
         elif config.training_stage == "critic_only":
@@ -166,6 +173,7 @@ class ChunkACPolicy(PreTrainedPolicy):
         # Persistent step counter — survives ckpt save/load.
         self.register_buffer("_critic_step", torch.zeros((), dtype=torch.long), persistent=True)
         self.register_buffer("_human_bc_step", torch.zeros((), dtype=torch.long), persistent=True)
+        self.register_buffer("_teacher_bc_step", torch.zeros((), dtype=torch.long), persistent=True)
         self.register_buffer(
             "_actor_bc_tau_low_ema",
             torch.tensor(float(config.actor_bc_uncertainty_tau_low)),
@@ -178,6 +186,10 @@ class ChunkACPolicy(PreTrainedPolicy):
         )
         self._diagnostics_jsonl_initialized = False
         self._legacy_transition_schema_warned = False
+        # Kept outside nn.Module registration so it is neither optimized nor
+        # serialized into the student checkpoint. It is created lazily only by
+        # the teacher_bc training path.
+        object.__setattr__(self, "_teacher_actor", None)
 
         # Deploy-only: lazy build at .reset() time.
         self.modifier: RLTActionModifier | None = None
@@ -350,6 +362,8 @@ class ChunkACPolicy(PreTrainedPolicy):
         training_stage = getattr(self.config, "training_stage", "mixed_ac")
         if training_stage == "human_bc":
             return self._forward_human_bc(tx)
+        if training_stage == "teacher_bc":
+            return self._forward_teacher_bc(tx)
 
         c_loss, critic_info = critic_loss_with_diagnostics(
             self.critic,
@@ -455,6 +469,198 @@ class ChunkACPolicy(PreTrainedPolicy):
             "actor_update": True,
             "human_bc_stage": True,
         }
+        return loss, self._finalize_diagnostics(raw_info)
+
+    def _load_frozen_teacher_actor(self, like: Tensor) -> ChunkActor:
+        teacher = getattr(self, "_teacher_actor", None)
+        if teacher is not None:
+            return teacher
+
+        path_value = getattr(self.config, "actor_teacher_pretrained_path", "")
+        if not path_value:
+            raise ValueError(
+                "teacher_bc requires config.actor_teacher_pretrained_path"
+            )
+        checkpoint_path = Path(path_value).expanduser()
+        weights_path = (
+            checkpoint_path
+            if checkpoint_path.is_file()
+            else checkpoint_path / "model.safetensors"
+        )
+        if not weights_path.is_file():
+            raise FileNotFoundError(
+                "Frozen teacher actor weights not found: "
+                f"{weights_path}. Pass the AC pretrained_model directory."
+            )
+
+        full_state = load_safetensors_file(str(weights_path), device="cpu")
+        actor_state = {
+            key.removeprefix("actor."): value
+            for key, value in full_state.items()
+            if key.startswith("actor.")
+        }
+        if not actor_state:
+            raise ValueError(
+                f"Frozen teacher checkpoint has no actor.* tensors: {weights_path}"
+            )
+
+        teacher = copy.deepcopy(self.actor).cpu()
+        try:
+            teacher.load_state_dict(actor_state, strict=True)
+        except RuntimeError as error:
+            raise ValueError(
+                "Frozen teacher actor architecture does not match the student: "
+                f"{weights_path}"
+            ) from error
+        teacher.to(device=like.device, dtype=next(self.actor.parameters()).dtype)
+        for parameter in teacher.parameters():
+            parameter.requires_grad_(False)
+        teacher.eval()
+        object.__setattr__(self, "_teacher_actor", teacher)
+        log.info("Loaded frozen warmup actor teacher from %s", weights_path)
+        return teacher
+
+    @staticmethod
+    def _teacher_supervision_masks(tx: dict[str, Tensor]) -> dict[str, Tensor]:
+        source = tx.get("source")
+        actor_bc_mask = tx.get("actor_bc_mask")
+        intervention_reason = tx.get("intervention_reason")
+        if source is None or actor_bc_mask is None or intervention_reason is None:
+            raise KeyError(
+                "teacher_bc requires source, actor_bc_mask, and intervention_reason "
+                "from a typed outcome-aware cache"
+            )
+
+        source = source.reshape(-1).to(dtype=torch.long)
+        actor_bc_valid = actor_bc_mask.reshape(-1) > 0.5
+        reason = intervention_reason.reshape(-1).to(dtype=torch.long)
+        allowed = (
+            (source == TRANSITION_SOURCE_DEMO)
+            | (source == TRANSITION_SOURCE_WARMUP_VLA)
+            | (source == TRANSITION_SOURCE_RL_AUTONOMOUS)
+            | (source == TRANSITION_SOURCE_HUMAN_OVERRIDE)
+        )
+        if not bool(torch.all(allowed)):
+            observed = sorted(int(value) for value in source.detach().unique().cpu().tolist())
+            raise ValueError(f"teacher_bc received unsupported source ids: {observed}")
+
+        autonomous = (
+            (source == TRANSITION_SOURCE_WARMUP_VLA)
+            | (source == TRANSITION_SOURCE_RL_AUTONOMOUS)
+        )
+        autonomous_success = autonomous & actor_bc_valid
+        corrective_prefix = autonomous & (~actor_bc_valid) & (reason == 1)
+        proactive_prefix = autonomous & (~actor_bc_valid) & (reason == 2)
+        autonomous_failure = autonomous & (~actor_bc_valid) & (reason == 0)
+        malformed_success = autonomous_success & (reason != 0)
+        if bool(malformed_success.any()):
+            raise ValueError(
+                "teacher_bc found autonomous BC-valid samples carrying a non-zero "
+                "intervention_reason"
+            )
+
+        demo = source == TRANSITION_SOURCE_DEMO
+        human = source == TRANSITION_SOURCE_HUMAN_OVERRIDE
+        teacher = demo | autonomous_success | proactive_prefix
+        if bool((human & teacher).any()):
+            raise RuntimeError("human and teacher supervision masks must be disjoint")
+        ignored = ~(human | teacher)
+        return {
+            "demo": demo,
+            "autonomous_success": autonomous_success,
+            "autonomous_failure": autonomous_failure,
+            "corrective_prefix": corrective_prefix,
+            "proactive_prefix": proactive_prefix,
+            "human": human,
+            "teacher": teacher,
+            "ignored": ignored,
+        }
+
+    @staticmethod
+    def _masked_scalar_mean(values: Tensor, mask: Tensor) -> Tensor:
+        values = values.reshape(-1)
+        weights = mask.reshape(-1).to(device=values.device, dtype=values.dtype)
+        return (values * weights).sum() / weights.sum().clamp_min(1.0)
+
+    def _forward_teacher_bc(self, tx: dict[str, Tensor]) -> tuple[Tensor, dict[str, Any]]:
+        """Learn human corrections while preserving the frozen warmup actor.
+
+        Human BC and teacher distillation use disjoint semantic masks and are
+        normalized independently. Demo and fully autonomous successful states
+        preserve the warmup function. Corrective prefixes and autonomous
+        failures are deliberately ignored; proactive prefixes are preserved.
+        """
+        masks = self._teacher_supervision_masks(tx)
+        proposal = tx["proposal_chunk_flat"]
+        student_mu, _ = self.actor.forward(tx["state_vec"], proposal, training=False)
+        teacher_actor = self._load_frozen_teacher_actor(student_mu)
+        with torch.no_grad():
+            teacher_mu, _ = teacher_actor.forward(
+                tx["state_vec"],
+                proposal,
+                training=False,
+            )
+
+        human_target = tx["bc_target_chunk_flat"]
+        if getattr(self.actor, "action_residual", False):
+            human_target = human_target.clamp(-1.0, 1.0)
+
+        human_per_sample = (student_mu - human_target).square().sum(dim=-1)
+        teacher_per_sample = (student_mu - teacher_mu).square().sum(dim=-1)
+        human_raw = self._masked_scalar_mean(human_per_sample, masks["human"])
+        teacher_raw = self._masked_scalar_mean(teacher_per_sample, masks["teacher"])
+        human_weighted = float(self.config.human_bc_weight) * human_raw
+        teacher_weighted = (
+            float(self.config.teacher_distillation_weight) * teacher_raw
+        )
+        loss = human_weighted + teacher_weighted
+        self._teacher_bc_step += 1
+
+        student_teacher_mse = (student_mu.detach() - teacher_mu).square().mean(dim=-1)
+        student_human_mse = (
+            student_mu.detach() - human_target.detach()
+        ).square().mean(dim=-1)
+        teacher_human_mse = (
+            teacher_mu.detach() - human_target.detach()
+        ).square().mean(dim=-1)
+
+        raw_info: dict[str, Any] = {
+            "loss_total_step": loss.detach(),
+            "loss_actor": loss.detach(),
+            "loss_actor_human_bc_raw": human_raw.detach(),
+            "loss_actor_human_bc_weighted": human_weighted.detach(),
+            "loss_actor_teacher_raw": teacher_raw.detach(),
+            "loss_actor_teacher_weighted": teacher_weighted.detach(),
+            "teacher_student_rmse": self._masked_scalar_mean(
+                student_teacher_mse, masks["teacher"]
+            ).sqrt(),
+            "human_student_rmse": self._masked_scalar_mean(
+                student_human_mse, masks["human"]
+            ).sqrt(),
+            "human_teacher_rmse": self._masked_scalar_mean(
+                teacher_human_mse, masks["human"]
+            ).sqrt(),
+            "teacher_sample_frac": masks["teacher"].float().mean(),
+            "human_sample_frac": masks["human"].float().mean(),
+            "teacher_ignored_sample_frac": masks["ignored"].float().mean(),
+            "teacher_bc_step": self._teacher_bc_step.detach().clone(),
+            "actor_update": True,
+            "teacher_bc_stage": True,
+            **self._source_fraction_diagnostics(tx),
+        }
+        for category in (
+            "demo",
+            "autonomous_success",
+            "autonomous_failure",
+            "corrective_prefix",
+            "proactive_prefix",
+            "human",
+        ):
+            mask = masks[category]
+            raw_info[f"teacher_{category}_sample_frac"] = mask.float().mean()
+            raw_info[f"teacher_{category}_student_drift_rmse"] = (
+                self._masked_scalar_mean(student_teacher_mse, mask).sqrt()
+            )
         return loss, self._finalize_diagnostics(raw_info)
 
     @staticmethod
@@ -1019,7 +1225,7 @@ class ChunkACPolicy(PreTrainedPolicy):
             critic_group["lr"] = float(critic_lr)
 
         training_stage = getattr(self.config, "training_stage", "mixed_ac")
-        if training_stage == "human_bc":
+        if training_stage in {"human_bc", "teacher_bc"}:
             return [actor_group]
         if training_stage == "critic_only":
             return [critic_group]
@@ -1032,16 +1238,25 @@ class ChunkACPolicy(PreTrainedPolicy):
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
         self._rl_token_policy.to(*args, **kwargs)
+        teacher = getattr(self, "_teacher_actor", None)
+        if teacher is not None:
+            teacher.to(*args, **kwargs)
         return self
 
     def cuda(self, device=None):
         super().cuda(device)
         self._rl_token_policy.cuda(device)
+        teacher = getattr(self, "_teacher_actor", None)
+        if teacher is not None:
+            teacher.cuda(device)
         return self
 
     def cpu(self):
         super().cpu()
         self._rl_token_policy.cpu()
+        teacher = getattr(self, "_teacher_actor", None)
+        if teacher is not None:
+            teacher.cpu()
         return self
 
     def train(self, mode: bool = True):
@@ -1049,4 +1264,7 @@ class ChunkACPolicy(PreTrainedPolicy):
         # Frozen backbones always in eval.
         self._rl_token_policy.eval()
         self.target_critic.eval()
+        teacher = getattr(self, "_teacher_actor", None)
+        if teacher is not None:
+            teacher.eval()
         return self

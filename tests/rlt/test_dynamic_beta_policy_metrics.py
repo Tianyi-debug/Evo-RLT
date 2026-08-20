@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from lerobot.policies.pretrained import PreTrainedPolicy
+from safetensors.torch import save_file as save_safetensors_file
 
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_ac import ChunkACPolicy
 from evo_rlt.core.actor import ChunkActor
@@ -64,6 +65,7 @@ def _head_only_policy(
         parameter.requires_grad_(False)
     policy.register_buffer("_critic_step", torch.zeros((), dtype=torch.long))
     policy.register_buffer("_human_bc_step", torch.zeros((), dtype=torch.long))
+    policy.register_buffer("_teacher_bc_step", torch.zeros((), dtype=torch.long))
     policy.register_buffer("_actor_bc_tau_low_ema", torch.tensor(0.0))
     policy.register_buffer("_actor_bc_tau_high_ema", torch.tensor(0.2))
     policy._diagnostics_jsonl_initialized = False
@@ -175,6 +177,77 @@ def test_human_bc_forward_is_actor_only_and_rejects_non_human_batches():
     batch["source"][0] = 1
     with pytest.raises(ValueError, match="accepts only source=3"):
         policy.forward(batch)
+
+
+def test_teacher_bc_uses_disjoint_semantic_masks_and_frozen_actor(tmp_path):
+    policy = _head_only_policy()
+    teacher_state = {
+        f"actor.{key}": value.detach().clone()
+        for key, value in policy.actor.state_dict().items()
+    }
+    teacher_dir = tmp_path / "teacher" / "pretrained_model"
+    teacher_dir.mkdir(parents=True)
+    save_safetensors_file(teacher_state, teacher_dir / "model.safetensors")
+
+    with torch.no_grad():
+        for parameter in policy.actor.parameters():
+            parameter.add_(0.05)
+    policy.config.training_stage = "teacher_bc"
+    policy.config.actor_q_weight = 0.0
+    policy.config.actor_teacher_pretrained_path = str(teacher_dir)
+    policy.config.teacher_distillation_weight = 1.0
+    policy.config.human_bc_weight = 1.0
+    for parameter in policy.critic.parameters():
+        parameter.requires_grad_(False)
+
+    batch = _batch()
+    batch["source"] = torch.tensor([0, 0, 1, 2, 2, 2, 2, 3])
+    batch["actor_bc_mask"] = torch.tensor([1, 1, 1, 1, 0, 0, 0, 1])
+    batch["intervention_reason"] = torch.tensor([0, 0, 0, 0, 0, 1, 2, 1])
+    batch["proposal_chunk"] = batch.pop("ref_chunk")
+    batch["next_proposal_chunk"] = batch.pop("next_ref_chunk")
+    batch["bc_target_chunk"] = batch["proposal_chunk"].clone()
+    batch["bc_target_chunk"][-1] += 0.1
+
+    tx = policy._coerce_batch(batch)
+    masks = policy._teacher_supervision_masks(tx)
+    assert masks["teacher"].tolist() == [True, True, True, True, False, False, True, False]
+    assert masks["human"].tolist() == [False, False, False, False, False, False, False, True]
+    assert masks["ignored"].tolist() == [False, False, False, False, True, True, False, False]
+    assert not bool((masks["teacher"] & masks["human"]).any())
+
+    loss, info = policy.forward(batch)
+    loss.backward()
+
+    teacher = policy._teacher_actor
+    assert teacher is not None
+    assert "_teacher_actor" not in dict(policy.named_modules())
+    assert all(parameter.grad is None for parameter in teacher.parameters())
+    assert any(parameter.grad is not None for parameter in policy.actor.parameters())
+    assert all(parameter.grad is None for parameter in policy.critic.parameters())
+    assert info["teacher_bc_stage"] is True
+    assert info["teacher_bc_step"] == 1
+    assert info["teacher_sample_frac"] == pytest.approx(5 / 8)
+    assert info["human_sample_frac"] == pytest.approx(1 / 8)
+    assert info["teacher_ignored_sample_frac"] == pytest.approx(2 / 8)
+    assert info["teacher_corrective_prefix_sample_frac"] == pytest.approx(1 / 8)
+    assert info["teacher_proactive_prefix_sample_frac"] == pytest.approx(1 / 8)
+    assert info["loss_actor_teacher_raw"] > 0
+    assert info["loss_actor_human_bc_raw"] > 0
+
+    optim_params = policy.get_optim_params()
+    assert len(optim_params) == 1
+    assert list(optim_params[0]["params"]) == list(policy.actor.parameters())
+
+
+def test_teacher_bc_rejects_cache_without_typed_masks():
+    policy = _head_only_policy()
+    policy.config.training_stage = "teacher_bc"
+    policy.config.actor_teacher_pretrained_path = "/tmp/unused"
+    policy.config.actor_q_weight = 0.0
+
+    with pytest.raises(KeyError, match="actor_bc_mask"):
+        policy.forward(_batch())
 
 
 def test_ema_thresholds_are_used_before_batch_quantiles_update_them():

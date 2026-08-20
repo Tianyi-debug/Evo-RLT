@@ -34,6 +34,9 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.actor_lr is None
     assert config.critic_lr is None
     assert config.actor_behavior_preservation_weight == 0.0
+    assert config.actor_teacher_pretrained_path == ""
+    assert config.teacher_distillation_weight == pytest.approx(1.0)
+    assert config.human_bc_weight == pytest.approx(1.0)
 
 
 def test_per_action_dim_delta_scale_validates_action_shape():
@@ -219,3 +222,43 @@ def test_two_stage_training_config_validates_and_round_trips(tmp_path):
         ChunkACPolicyConfig(actor_behavior_preservation_weight=-0.1)
     with pytest.raises(ValueError, match="actor_q_weight"):
         ChunkACPolicyConfig(actor_q_weight=-0.1)
+
+
+def test_teacher_bc_config_validates_and_round_trips(tmp_path):
+    config = ChunkACPolicyConfig(
+        training_stage="teacher_bc",
+        actor_q_weight=0.0,
+        actor_teacher_pretrained_path="/tmp/warmup/pretrained_model",
+        teacher_distillation_weight=2.0,
+        human_bc_weight=0.5,
+    )
+    config.save_pretrained(tmp_path)
+
+    ChunkACPolicyConfig.ensure_registered()
+    loaded = PreTrainedConfig.from_pretrained(tmp_path)
+
+    assert loaded.training_stage == "teacher_bc"
+    assert loaded.actor_q_weight == pytest.approx(0.0)
+    assert loaded.actor_teacher_pretrained_path == "/tmp/warmup/pretrained_model"
+    assert loaded.teacher_distillation_weight == pytest.approx(2.0)
+    assert loaded.human_bc_weight == pytest.approx(0.5)
+
+    with pytest.raises(ValueError, match="actor_teacher_pretrained_path"):
+        ChunkACPolicyConfig(training_stage="teacher_bc", actor_q_weight=0.0)
+    with pytest.raises(ValueError, match="actor_q_weight=0"):
+        ChunkACPolicyConfig(
+            training_stage="teacher_bc",
+            actor_teacher_pretrained_path="/tmp/warmup/pretrained_model",
+        )
+    with pytest.raises(ValueError, match="teacher_distillation_weight"):
+        ChunkACPolicyConfig(teacher_distillation_weight=-1.0)
+    with pytest.raises(ValueError, match="human_bc_weight"):
+        ChunkACPolicyConfig(human_bc_weight=-1.0)
+    with pytest.raises(ValueError, match="positive"):
+        ChunkACPolicyConfig(
+            training_stage="teacher_bc",
+            actor_q_weight=0.0,
+            actor_teacher_pretrained_path="/tmp/warmup/pretrained_model",
+            teacher_distillation_weight=0.0,
+            human_bc_weight=0.0,
+        )

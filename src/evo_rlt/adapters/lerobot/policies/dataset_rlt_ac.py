@@ -170,9 +170,15 @@ class ChunkTransitionDataset(Dataset):
         source_sampling_weights: list[float] | None,
         source_sampling_seed: int,
     ) -> list[int]:
-        if training_stage not in ("mixed_ac", "human_bc", "critic_only"):
+        if training_stage not in (
+            "mixed_ac",
+            "human_bc",
+            "teacher_bc",
+            "critic_only",
+        ):
             raise ValueError(
-                "training_stage must be 'mixed_ac', 'human_bc', or 'critic_only', "
+                "training_stage must be 'mixed_ac', 'human_bc', 'teacher_bc', "
+                "or 'critic_only', "
                 f"got {training_stage!r}"
             )
         if training_stage == "human_bc":
