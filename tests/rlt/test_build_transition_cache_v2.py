@@ -581,30 +581,34 @@ def test_transition_cache_v2_censors_typed_authority_boundary(reason):
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 
     chunk_length = 2
-    frame_indices = list(range(12))
+    frame_indices = list(range(0, 17, 2))
     provenance = module.FrameProvenance(
         is_intervention=torch.tensor(
-            [0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 0],
+            [0] * 10 + [1] * 6 + [0],
             dtype=torch.float32,
         ),
-        collector_policy_id=torch.tensor([2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 2]),
+        collector_policy_id=torch.tensor(
+            [2] * 10 + [0] * 6 + [2]
+        ),
         intervention_stage=torch.tensor(
-            [0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 3],
+            [0] * 10 + [1, 1] + [2] * 4 + [3],
             dtype=torch.float32,
         ),
         intervention_reason=torch.tensor(
-            [0, 0, 0, 0, reason, reason, reason, reason, reason, reason, reason, reason]
+            [0] * 10 + [reason] * 7
         ),
     )
 
     transitions = module._encoded_episode_to_transitions(
-        state_vecs=torch.arange(12 * 4, dtype=torch.float32).view(12, 4),
-        ref_chunks=torch.randn(12, chunk_length, 2),
-        exec_chunks=torch.randn(12, chunk_length, 2),
+        state_vecs=torch.tensor(frame_indices, dtype=torch.float32)
+        .unsqueeze(1)
+        .repeat(1, 4),
+        ref_chunks=torch.randn(len(frame_indices), chunk_length, 2),
+        exec_chunks=torch.randn(len(frame_indices), chunk_length, 2),
         frame_indices=frame_indices,
-        episode_last_frame=11,
+        episode_last_frame=16,
         chunk_length=chunk_length,
-        frame_stride=1,
+        frame_stride=2,
         episode_success=True,
         ep_id=70,
         provenance=provenance,
@@ -614,6 +618,7 @@ def test_transition_cache_v2_censors_typed_authority_boundary(reason):
     human = [t for t in transitions if int(t.source.item()) == module.TRANSITION_SOURCE_HUMAN_OVERRIDE]
     assert policy
     assert human
+    assert [int(t.state_vec[0].item()) for t in policy] == [0, 2, 4, 6, 8]
     assert all(t.critic_mask.item() == 0.0 for t in human)
     assert all(t.actor_q_mask.item() == 0.0 for t in human)
     assert all(t.bootstrap_mask.item() == 0.0 for t in human)
@@ -631,7 +636,7 @@ def test_transition_cache_v2_censors_typed_authority_boundary(reason):
     # The earlier autonomous prefix remains a normal Bellman chain. In
     # particular, corrective censoring is no longer encoded as done=1/reward=0.
     earlier = [t for t in policy if t is not boundary]
-    assert earlier
+    assert len(earlier) == 4
     assert all(t.done.item() == 0.0 for t in earlier)
     assert all(t.bootstrap_mask.item() == 1.0 for t in earlier)
     assert all(t.critic_mask.item() == 1.0 for t in earlier)
