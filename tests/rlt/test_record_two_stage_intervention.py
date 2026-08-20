@@ -69,7 +69,7 @@ def test_two_stage_intervention_holds_then_teleops_then_releases(
 
         def send_action(self, action):
             self.actions.append(action)
-            return action
+            return {"joint.pos": 50.0}
 
     class FakePolicy:
         config = SimpleNamespace(input_features={}, device="cpu", use_amp=False)
@@ -83,6 +83,7 @@ def test_two_stage_intervention_holds_then_teleops_then_releases(
         features = {
             "action": {"names": ["joint.pos"]},
             "complementary_info.policy_action": {"names": ["joint.pos"]},
+            "complementary_info.requested_action": {"names": ["joint.pos"]},
             "complementary_info.is_intervention": {},
             "complementary_info.state": {},
             "complementary_info.intervention_stage": {},
@@ -110,7 +111,7 @@ def test_two_stage_intervention_holds_then_teleops_then_releases(
 
         def send_action(self, action):
             self.actions.append(action)
-            return action
+            return {"joint.pos": float(action["joint.pos"]) - 1.0}
 
     monkeypatch.setattr(loop, "Teleoperator", FakeTeleop)
     monkeypatch.setattr(loop, "precise_sleep", lambda _: None)
@@ -156,6 +157,15 @@ def test_two_stage_intervention_holds_then_teleops_then_releases(
     assert sync_executor.actions[0]["joint.pos"] == 42.0
     assert sync_executor.actions[1]["joint.pos"] == 7.0
     assert robot.actions == [{"joint.pos": 99.0}]
+    assert [frame["action"]["joint.pos"] for frame in dataset.frames] == [41.0, 50.0, 6.0]
+    assert [
+        frame["complementary_info.requested_action"]["joint.pos"]
+        for frame in dataset.frames
+    ] == [42.0, 99.0, 7.0]
+    assert [
+        frame["complementary_info.policy_action"]["joint.pos"]
+        for frame in dataset.frames
+    ] == [0.0, 0.0, 7.0]
     assert [
         frame["complementary_info.is_intervention"].item()
         for frame in dataset.frames

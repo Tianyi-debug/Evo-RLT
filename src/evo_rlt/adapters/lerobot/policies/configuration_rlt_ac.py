@@ -113,6 +113,10 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     actor_teacher_pretrained_path: str = ""
     teacher_distillation_weight: float = 1.0
     human_bc_weight: float = 1.0
+    # Explicit opt-in. ``raw`` preserves every historical checkpoint/config;
+    # ``residual_feasible`` projects source=3 targets only at loss time while
+    # retaining the raw cache action for diagnostics and critic semantics.
+    human_bc_target_mode: str = "raw"
 
     # --- Shapes ---
     chunk_length: int = 10
@@ -279,6 +283,11 @@ class ChunkACPolicyConfig(PreTrainedConfig):
         if self.human_bc_weight < 0:
             raise ValueError(
                 f"human_bc_weight must be non-negative, got {self.human_bc_weight}"
+            )
+        if self.human_bc_target_mode not in ("raw", "residual_feasible"):
+            raise ValueError(
+                "human_bc_target_mode must be 'raw' or 'residual_feasible', "
+                f"got {self.human_bc_target_mode!r}"
             )
         if self.training_stage == "teacher_bc":
             if not self.actor_teacher_pretrained_path:

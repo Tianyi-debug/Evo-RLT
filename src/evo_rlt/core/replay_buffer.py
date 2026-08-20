@@ -90,4 +90,7 @@ class ReplayBuffer:
             CACHE_SEMANTICS_VERSION: torch.stack(
                 [t.cache_semantics_version for t in batch]
             ),
+            "exec_action_is_actual_sent": torch.stack(
+                [t.exec_action_is_actual_sent for t in batch]
+            ),
         }

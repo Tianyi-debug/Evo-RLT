@@ -42,6 +42,8 @@ def _head_only_policy(
         critic_bootstrap_keep_prob=0.8,
         critic_bootstrap_seed=1000,
         diagnostics_jsonl_path=diagnostics_jsonl_path,
+        action_dim=2,
+        human_bc_target_mode="raw",
     )
     policy.actor = ChunkActor(
         state_dim=6,
@@ -384,3 +386,62 @@ def test_jsonl_records_every_critic_step_and_actor_frequency(tmp_path):
         for row in rows
         for value in row.values()
     )
+
+
+def test_projected_human_mode_changes_only_human_target_loss(tmp_path):
+    policy = _head_only_policy()
+    teacher_state = {
+        f"actor.{key}": value.detach().clone()
+        for key, value in policy.actor.state_dict().items()
+    }
+    teacher_dir = tmp_path / "teacher" / "pretrained_model"
+    teacher_dir.mkdir(parents=True)
+    save_safetensors_file(teacher_state, teacher_dir / "model.safetensors")
+    policy.config.training_stage = "teacher_bc"
+    policy.config.actor_q_weight = 0.0
+    policy.config.actor_teacher_pretrained_path = str(teacher_dir)
+    policy.config.teacher_distillation_weight = 1.0
+    policy.config.human_bc_weight = 1.0
+
+    batch = _batch()
+    batch["source"] = torch.tensor([0, 0, 1, 2, 2, 2, 2, 3])
+    batch["actor_bc_mask"] = torch.tensor([1, 1, 1, 1, 0, 0, 0, 1])
+    batch["intervention_reason"] = torch.tensor([0, 0, 0, 0, 0, 1, 2, 1])
+    batch["proposal_chunk"] = torch.zeros_like(batch.pop("ref_chunk"))
+    batch["next_proposal_chunk"] = batch.pop("next_ref_chunk")
+    batch["bc_target_chunk"] = batch["proposal_chunk"].clone()
+    batch["bc_target_chunk"][-1] = 1.0
+
+    policy.config.human_bc_target_mode = "raw"
+    raw_loss, raw_info = policy.forward(batch)
+    policy.config.human_bc_target_mode = "residual_feasible"
+    projected_loss, projected_info = policy.forward(batch)
+
+    assert projected_loss < raw_loss
+    assert projected_info["loss_actor_human_bc_raw"] < raw_info[
+        "loss_actor_human_bc_raw"
+    ]
+    assert projected_info["loss_actor_teacher_raw"] == pytest.approx(
+        raw_info["loss_actor_teacher_raw"]
+    )
+    assert projected_info["human_projection_fraction"] == pytest.approx(1.0)
+    assert projected_info["human_raw_target_rmse"] > projected_info[
+        "human_feasible_target_rmse"
+    ]
+
+
+def test_legacy_raw_human_mode_keeps_unprojected_loss():
+    policy = _head_only_policy()
+    policy.config.training_stage = "human_bc"
+    policy.config.human_bc_target_mode = "raw"
+    batch = _batch()
+    batch["source"] = torch.full((8,), 3)
+    batch["proposal_chunk"] = torch.zeros_like(batch.pop("ref_chunk"))
+    batch["next_proposal_chunk"] = batch.pop("next_ref_chunk")
+    batch["bc_target_chunk"] = torch.full_like(batch["proposal_chunk"], 0.5)
+
+    loss, info = policy.forward(batch)
+
+    # Four flattened action values per sample, each with squared error 0.25.
+    assert loss.item() == pytest.approx(1.0)
+    assert info["human_projection_fraction"] == pytest.approx(1.0)

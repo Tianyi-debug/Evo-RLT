@@ -231,6 +231,7 @@ def test_teacher_bc_config_validates_and_round_trips(tmp_path):
         actor_teacher_pretrained_path="/tmp/warmup/pretrained_model",
         teacher_distillation_weight=2.0,
         human_bc_weight=0.5,
+        human_bc_target_mode="residual_feasible",
     )
     config.save_pretrained(tmp_path)
 
@@ -242,6 +243,7 @@ def test_teacher_bc_config_validates_and_round_trips(tmp_path):
     assert loaded.actor_teacher_pretrained_path == "/tmp/warmup/pretrained_model"
     assert loaded.teacher_distillation_weight == pytest.approx(2.0)
     assert loaded.human_bc_weight == pytest.approx(0.5)
+    assert loaded.human_bc_target_mode == "residual_feasible"
 
     with pytest.raises(ValueError, match="actor_teacher_pretrained_path"):
         ChunkACPolicyConfig(training_stage="teacher_bc", actor_q_weight=0.0)
@@ -254,6 +256,8 @@ def test_teacher_bc_config_validates_and_round_trips(tmp_path):
         ChunkACPolicyConfig(teacher_distillation_weight=-1.0)
     with pytest.raises(ValueError, match="human_bc_weight"):
         ChunkACPolicyConfig(human_bc_weight=-1.0)
+    with pytest.raises(ValueError, match="human_bc_target_mode"):
+        ChunkACPolicyConfig(human_bc_target_mode="unsupported")
     with pytest.raises(ValueError, match="positive"):
         ChunkACPolicyConfig(
             training_stage="teacher_bc",

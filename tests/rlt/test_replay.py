@@ -82,6 +82,7 @@ def test_batch_keys():
         "is_critical", "intervention", "critic_mask", "actor_q_mask",
         "actor_bc_mask", "intervention_reason", "bootstrap_mask",
         "cache_semantics_version",
+        "exec_action_is_actual_sent",
     }
     assert set(batch.keys()) == expected_keys
 

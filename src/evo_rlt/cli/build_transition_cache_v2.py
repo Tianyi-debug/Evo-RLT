@@ -816,6 +816,7 @@ def _encoded_episode_to_transitions(
     human_reference_mode: str = "executed",
     legacy_handoff_policy: str = "majority",
     actor_bc_mode: str = "legacy",
+    exec_action_is_actual_sent: bool = False,
 ) -> list[ChunkTransition]:
     if not (state_vecs.shape[0] == ref_chunks.shape[0] == exec_chunks.shape[0] == len(frame_indices)):
         raise ValueError(
@@ -838,6 +839,10 @@ def _encoded_episode_to_transitions(
         episode_id=ep_id,
         is_critical=1.0,
     )
+    for transition in transitions:
+        transition.exec_action_is_actual_sent = torch.tensor(
+            float(exec_action_is_actual_sent)
+        )
     if provenance is None:
         if demo_reference_mode == "executed":
             for transition in transitions:
@@ -1022,6 +1027,7 @@ def _encode_episode(
     human_reference_mode: str,
     legacy_handoff_policy: str,
     actor_bc_mode: str,
+    exec_action_is_actual_sent: bool,
 ) -> list[ChunkTransition]:
     """Encode sampled episode frames and build paper-style C-step transitions."""
     if not frame_indices:
@@ -1085,6 +1091,7 @@ def _encode_episode(
         human_reference_mode=human_reference_mode,
         legacy_handoff_policy=legacy_handoff_policy,
         actor_bc_mode=actor_bc_mode,
+        exec_action_is_actual_sent=exec_action_is_actual_sent,
     )
 
 
@@ -1109,6 +1116,7 @@ def _transition_summary(
     critic_valid = 0
     actor_q_valid = 0
     actor_bc_valid = 0
+    actual_sent_exec = 0
     actor_bc_valid_sources: dict[int, int] = {}
     corrective_transitions = 0
     proactive_transitions = 0
@@ -1119,6 +1127,9 @@ def _transition_summary(
         actor_q_valid += int(float(transition.actor_q_mask.item()) > 0.5)
         bc_is_valid = int(float(transition.actor_bc_mask.item()) > 0.5)
         actor_bc_valid += bc_is_valid
+        actual_sent_exec += int(
+            float(transition.exec_action_is_actual_sent.item()) > 0.5
+        )
         actor_bc_valid_sources[source] = actor_bc_valid_sources.get(source, 0) + bc_is_valid
         reason = int(transition.intervention_reason.item())
         corrective_transitions += int(reason == int(INTERVENTION_REASON_CORRECTIVE))
@@ -1162,6 +1173,7 @@ def _transition_summary(
         f"critic_valid={critic_valid}/{len(transitions)} "
         f"actor_q_valid={actor_q_valid}/{len(transitions)} "
         f"actor_bc_valid={actor_bc_valid}/{len(transitions)} "
+        f"exec_action_actual_sent={actual_sent_exec}/{len(transitions)} "
         f"actor_bc_valid_sources={dict(sorted(actor_bc_valid_sources.items()))} "
         f"corrective_labeled={corrective_transitions} "
         f"proactive_labeled={proactive_transitions} "
@@ -1263,6 +1275,18 @@ def main() -> None:
         dataset,
         args.provenance_mode,
         args.missing_intervention_reason,
+    )
+    exec_action_is_actual_sent = (
+        "complementary_info.requested_action"
+        in getattr(dataset, "features", {})
+    )
+    _log(
+        "dataset action semantics: "
+        + (
+            "actual-sent (requested_action provenance present)"
+            if exec_action_is_actual_sent
+            else "legacy requested/pre-clipping (requested_action provenance absent)"
+        )
     )
     _log(
         f"actor BC mode={args.actor_bc_mode}; proposal remains the actor input/residual base"
@@ -1390,6 +1414,7 @@ def main() -> None:
                     human_reference_mode=args.human_reference_mode,
                     legacy_handoff_policy=args.legacy_handoff_policy,
                     actor_bc_mode=args.actor_bc_mode,
+                    exec_action_is_actual_sent=exec_action_is_actual_sent,
                 )
                 raw_transition_count = sum(
                     1

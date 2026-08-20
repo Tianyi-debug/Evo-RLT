@@ -157,6 +157,37 @@ class ChunkActor(nn.Module):
             )
         return per_action.repeat(repeats).unsqueeze(0)
 
+    def residual_reachable_interval(
+        self,
+        ref_chunk_flat: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the closed reachable interval of the bounded residual actor.
+
+        ``tanh`` approaches the residual limits asymptotically, so this is the
+        closure of the exact finite-logit support. It is the appropriate set
+        for a stable nearest-point BC target, including the actor's pre/post
+        ``[-1, 1]`` clamps.
+        """
+        if not self.action_residual:
+            raise ValueError("residual reachable support requires action_residual=True")
+        base = ref_chunk_flat.clamp(-1.0, 1.0)
+        bound = self.residual_delta_bound(base)
+        lower = (base - bound).clamp_min(-1.0)
+        upper = (base + bound).clamp_max(1.0)
+        return lower, upper
+
+    def project_to_residual_support(
+        self,
+        ref_chunk_flat: torch.Tensor,
+        target_chunk_flat: torch.Tensor,
+    ) -> torch.Tensor:
+        """Project an action target onto the residual actor's reachable set."""
+        target = target_chunk_flat.clamp(-1.0, 1.0)
+        if not self.action_residual:
+            return target
+        lower, upper = self.residual_reachable_interval(ref_chunk_flat)
+        return torch.maximum(torch.minimum(target, upper), lower)
+
     def forward(
         self,
         state_vec: torch.Tensor,

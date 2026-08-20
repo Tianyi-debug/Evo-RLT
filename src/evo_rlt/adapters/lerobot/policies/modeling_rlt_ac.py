@@ -436,22 +436,29 @@ class ChunkACPolicy(PreTrainedPolicy):
             raise ValueError(f"human_bc accepts only source=3 batches, got sources={observed}")
 
         proposal = tx["proposal_chunk_flat"]
-        bc_target = tx["bc_target_chunk_flat"]
+        raw_target = tx["bc_target_chunk_flat"]
         mu, _ = self.actor.forward(tx["state_vec"], proposal, training=True)
         if getattr(self.actor, "action_residual", False):
-            bc_target = bc_target.clamp(-1.0, 1.0)
+            raw_target = raw_target.clamp(-1.0, 1.0)
+        feasible_target = self.actor.project_to_residual_support(proposal, raw_target)
+        bc_target = (
+            feasible_target
+            if getattr(self.config, "human_bc_target_mode", "raw")
+            == "residual_feasible"
+            else raw_target
+        )
         bc_per_sample = (mu - bc_target).square().sum(dim=-1)
         loss = bc_per_sample.mean()
         self._human_bc_step += 1
 
         executable_proposal = proposal.detach().clamp(-1.0, 1.0)
-        human_delta = bc_target.detach() - executable_proposal
-        if getattr(self.actor, "action_residual", False):
-            residual_bound = self.actor.residual_delta_bound(human_delta)
-            outside = (human_delta.abs() > residual_bound + 1e-6).any(dim=-1)
-            outside_frac = outside.float().mean()
-        else:
-            outside_frac = loss.detach().new_zeros(())
+        human_delta = raw_target.detach() - executable_proposal
+        projection_info = self._human_projection_diagnostics(
+            mu=mu,
+            raw_target=raw_target,
+            feasible_target=feasible_target,
+            human_mask=torch.ones(mu.shape[0], dtype=torch.bool, device=mu.device),
+        )
         raw_info = {
             "loss_total_step": loss.detach(),
             "loss_actor": loss.detach(),
@@ -459,7 +466,9 @@ class ChunkACPolicy(PreTrainedPolicy):
             "actor_bc_target_rmse": (mu.detach() - bc_target.detach()).square().mean().sqrt(),
             "actor_ref_rmse": (mu.detach() - executable_proposal).square().mean().sqrt(),
             "human_vla_action_rmse": human_delta.square().mean().sqrt(),
-            "human_target_outside_residual_bound_frac": outside_frac,
+            "human_target_outside_residual_bound_frac": projection_info[
+                "human_target_outside_chunk_frac"
+            ],
             "human_sample_frac": loss.detach().new_ones(()),
             "source_0_frac": loss.detach().new_zeros(()),
             "source_1_frac": loss.detach().new_zeros(()),
@@ -468,6 +477,7 @@ class ChunkACPolicy(PreTrainedPolicy):
             "human_bc_step": self._human_bc_step.detach().clone(),
             "actor_update": True,
             "human_bc_stage": True,
+            **projection_info,
         }
         return loss, self._finalize_diagnostics(raw_info)
 
@@ -582,6 +592,70 @@ class ChunkACPolicy(PreTrainedPolicy):
         weights = mask.reshape(-1).to(device=values.device, dtype=values.dtype)
         return (values * weights).sum() / weights.sum().clamp_min(1.0)
 
+    def _human_projection_diagnostics(
+        self,
+        *,
+        mu: Tensor,
+        raw_target: Tensor,
+        feasible_target: Tensor,
+        human_mask: Tensor,
+    ) -> dict[str, Tensor]:
+        """Report raw/feasible fit and residual-support projection severity."""
+        human_mask = human_mask.reshape(-1).to(device=mu.device, dtype=torch.bool)
+        raw_mse = (mu.detach() - raw_target.detach()).square().mean(dim=-1)
+        feasible_mse = (
+            mu.detach() - feasible_target.detach()
+        ).square().mean(dim=-1)
+        projection = (raw_target.detach() - feasible_target.detach()).abs()
+        projection_per_sample = projection.square().sum(dim=-1).sqrt()
+        changed = projection > 1e-6
+
+        action_dim = int(self.config.action_dim)
+        if projection.shape[-1] % action_dim != 0:
+            raise ValueError(
+                f"flattened action width={projection.shape[-1]} is not divisible "
+                f"by action_dim={action_dim}"
+            )
+        changed_steps = changed.reshape(changed.shape[0], -1, action_dim)
+        selected_projection = projection_per_sample[human_mask]
+        zero = mu.detach().new_zeros(())
+        if selected_projection.numel():
+            projection_mean = selected_projection.mean()
+            projection_p50 = torch.quantile(selected_projection, 0.50)
+            projection_p95 = torch.quantile(selected_projection, 0.95)
+        else:
+            projection_mean = projection_p50 = projection_p95 = zero
+
+        info = {
+            "human_raw_target_rmse": self._masked_scalar_mean(
+                raw_mse, human_mask
+            ).sqrt(),
+            "human_feasible_target_rmse": self._masked_scalar_mean(
+                feasible_mse, human_mask
+            ).sqrt(),
+            "human_projection_error_mean": projection_mean,
+            "human_projection_error_p50": projection_p50,
+            "human_projection_error_p95": projection_p95,
+            "human_projection_fraction": self._masked_scalar_mean(
+                changed_steps.any(dim=(1, 2)).float(), human_mask
+            ),
+            "human_target_outside_step_frac": self._masked_scalar_mean(
+                changed_steps.any(dim=-1).float().mean(dim=-1), human_mask
+            ),
+            "human_target_outside_chunk_frac": self._masked_scalar_mean(
+                changed_steps.any(dim=(1, 2)).float(), human_mask
+            ),
+        }
+        for dim in range(action_dim):
+            info[f"human_projection_dim_{dim}_frac"] = self._masked_scalar_mean(
+                changed_steps[:, :, dim].float().mean(dim=-1), human_mask
+            )
+        if action_dim > 0:
+            info["human_projection_gripper_frac"] = info[
+                f"human_projection_dim_{action_dim - 1}_frac"
+            ]
+        return info
+
     def _forward_teacher_bc(self, tx: dict[str, Tensor]) -> tuple[Tensor, dict[str, Any]]:
         """Learn human corrections while preserving the frozen warmup actor.
 
@@ -601,9 +675,19 @@ class ChunkACPolicy(PreTrainedPolicy):
                 training=False,
             )
 
-        human_target = tx["bc_target_chunk_flat"]
+        raw_human_target = tx["bc_target_chunk_flat"]
         if getattr(self.actor, "action_residual", False):
-            human_target = human_target.clamp(-1.0, 1.0)
+            raw_human_target = raw_human_target.clamp(-1.0, 1.0)
+        feasible_human_target = self.actor.project_to_residual_support(
+            proposal,
+            raw_human_target,
+        )
+        human_target = (
+            feasible_human_target
+            if getattr(self.config, "human_bc_target_mode", "raw")
+            == "residual_feasible"
+            else raw_human_target
+        )
 
         human_per_sample = (student_mu - human_target).square().sum(dim=-1)
         teacher_per_sample = (student_mu - teacher_mu).square().sum(dim=-1)
@@ -621,8 +705,14 @@ class ChunkACPolicy(PreTrainedPolicy):
             student_mu.detach() - human_target.detach()
         ).square().mean(dim=-1)
         teacher_human_mse = (
-            teacher_mu.detach() - human_target.detach()
+            teacher_mu.detach() - raw_human_target.detach()
         ).square().mean(dim=-1)
+        projection_info = self._human_projection_diagnostics(
+            mu=student_mu,
+            raw_target=raw_human_target,
+            feasible_target=feasible_human_target,
+            human_mask=masks["human"],
+        )
 
         raw_info: dict[str, Any] = {
             "loss_total_step": loss.detach(),
@@ -646,6 +736,7 @@ class ChunkACPolicy(PreTrainedPolicy):
             "teacher_bc_step": self._teacher_bc_step.detach().clone(),
             "actor_update": True,
             "teacher_bc_stage": True,
+            **projection_info,
             **self._source_fraction_diagnostics(tx),
         }
         for category in (

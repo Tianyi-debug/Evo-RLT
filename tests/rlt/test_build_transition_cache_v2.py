@@ -209,6 +209,41 @@ def test_transition_cache_v2_demo_executed_mode_uses_expert_bc_target():
     assert torch.equal(transitions[0].bc_target_chunk, exec_chunks[0])
 
 
+def test_transition_cache_marks_actual_sent_exec_and_human_bc_uses_it():
+    module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
+    chunk_length = 2
+    frame_indices = [0, 1, 2]
+    requested = torch.full((3, chunk_length, 2), 0.8)
+    actual_sent = torch.full((3, chunk_length, 2), 0.3)
+    provenance = module.FrameProvenance(
+        is_intervention=torch.ones(3),
+        collector_policy_id=torch.full((3,), 3),
+        intervention_stage=torch.full((3,), 2.0),
+        intervention_reason=torch.full((3,), 1),
+    )
+
+    transitions = module._encoded_episode_to_transitions(
+        state_vecs=torch.randn(3, 4),
+        ref_chunks=requested,
+        exec_chunks=actual_sent,
+        frame_indices=frame_indices,
+        episode_last_frame=2,
+        chunk_length=chunk_length,
+        frame_stride=1,
+        episode_success=True,
+        ep_id=9,
+        provenance=provenance,
+        human_reference_mode="executed",
+        exec_action_is_actual_sent=True,
+    )
+
+    assert len(transitions) == 1
+    assert transitions[0].exec_action_is_actual_sent.item() == 1.0
+    assert torch.equal(transitions[0].exec_chunk, actual_sent[0])
+    assert torch.equal(transitions[0].bc_target_chunk, actual_sent[0])
+    assert not torch.equal(transitions[0].exec_chunk, requested[0])
+
+
 def test_transition_cache_v2_demo_executed_mode_with_zero_provenance():
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache_v2")
 

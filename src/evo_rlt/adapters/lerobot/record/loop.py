@@ -17,7 +17,7 @@
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, TypeVar
 
 import numpy as np
@@ -84,6 +84,34 @@ def _clone_robot_action(action: RobotAction) -> RobotAction:
         else:
             cloned[key] = value
     return cloned
+
+
+def _map_action_to_dataset_space(
+    action: RobotAction,
+    action_feature_names: list[str],
+    *,
+    action_label: str,
+) -> RobotAction:
+    """Select a robot action in the dataset ACTION coordinate schema.
+
+    The current LeRobot SO101 processors preserve the physical ``*.pos`` keys
+    through the final robot processor, and ``send_action`` returns those same
+    keys after ``max_relative_target`` clipping.  Keep this mapping explicit so
+    a future non-identity processor cannot silently record a requested command
+    as though it were the command sent to the motors.
+    """
+    if not isinstance(action, Mapping):
+        raise TypeError(
+            f"{action_label} must be a mapping in dataset action space, got "
+            f"{type(action).__name__}"
+        )
+    missing = [name for name in action_feature_names if name not in action]
+    if missing:
+        raise KeyError(
+            f"{action_label} cannot be mapped to dataset action features; "
+            f"missing keys={missing}, available={sorted(action)}"
+        )
+    return {name: action[name] for name in action_feature_names}
 
 
 def _extract_hold_action(
@@ -862,6 +890,16 @@ def record_loop(
                 lambda robot_action_to_send=robot_action_to_send: robot.send_action(robot_action_to_send),
             )
         _t_send = (time.perf_counter() - _t0) * 1000
+        requested_action_for_storage = _map_action_to_dataset_space(
+            robot_action_to_send,
+            action_feature_names,
+            action_label="requested action before robot clipping",
+        )
+        actual_sent_action_for_storage = _map_action_to_dataset_space(
+            _sent_action,
+            action_feature_names,
+            action_label="robot.send_action() return value",
+        )
 
         # Compute RLT metadata for both dataset writing and online collector.
         # Only pop metadata when policy action was actually executed (not during intervention)
@@ -883,11 +921,37 @@ def record_loop(
 
         # Write to dataset
         if dataset is not None:
-            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
+            records_actual_sent = (
+                "complementary_info.requested_action" in dataset.features
+            )
+            action_frame = build_dataset_frame(
+                dataset.features,
+                (
+                    actual_sent_action_for_storage
+                    if records_actual_sent
+                    else requested_action_for_storage
+                ),
+                prefix=ACTION,
+            )
             policy_action_frame = build_dataset_frame(
                 dataset.features, policy_action_for_storage, prefix="complementary_info.policy_action"
             )
-            frame = {**observation_frame, **action_frame, **policy_action_frame, "task": single_task}
+            requested_action_frame = (
+                build_dataset_frame(
+                    dataset.features,
+                    requested_action_for_storage,
+                    prefix="complementary_info.requested_action",
+                )
+                if records_actual_sent
+                else {}
+            )
+            frame = {
+                **observation_frame,
+                **action_frame,
+                **policy_action_frame,
+                **requested_action_frame,
+                "task": single_task,
+            }
 
             if "complementary_info.is_intervention" in dataset.features:
                 frame["complementary_info.is_intervention"] = np.array([is_intervention], dtype=np.float32)
@@ -926,7 +990,7 @@ def record_loop(
                 _write_recovery_row(frame)
 
         if rlt_online_collector is not None:
-            action_tensor = build_action_tensor(action_values)
+            action_tensor = build_action_tensor(actual_sent_action_for_storage)
             rlt_online_collector.on_frame(
                 action=action_tensor,
                 state_vec=None,
@@ -937,7 +1001,9 @@ def record_loop(
 
         if display_data:
             log_rerun_data(
-                observation=obs_processed, action=action_values, compress_images=display_compressed_images
+                observation=obs_processed,
+                action=actual_sent_action_for_storage,
+                compress_images=display_compressed_images,
             )
 
         if intervention_state == INTERVENTION_STATE_RELEASE:

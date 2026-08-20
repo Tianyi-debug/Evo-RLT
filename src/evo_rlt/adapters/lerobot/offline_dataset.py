@@ -336,6 +336,7 @@ def save_transition_cache(
             "actor_bc_mask": t.actor_bc_mask,
             "intervention_reason": t.intervention_reason,
             "cache_semantics_version": t.cache_semantics_version,
+            "exec_action_is_actual_sent": t.exec_action_is_actual_sent,
         }
         for t in transitions
     ]

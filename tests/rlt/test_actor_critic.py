@@ -129,6 +129,31 @@ class TestActor:
         expected = torch.tensor([0.1, 0.2, 0.7, 0.1, 0.2, 0.7]).repeat(2, 1)
         assert torch.allclose(mu, expected, atol=1e-6)
 
+    def test_residual_feasible_projection_uses_clamps_and_per_dim_bounds(self):
+        bounds = [0.30, 0.25, 0.18, 0.40, 0.35, 0.90]
+        actor = ChunkActor(
+            state_dim=8,
+            chunk_dim=60,
+            hidden_dim=16,
+            num_layers=2,
+            action_residual=True,
+            delta_scale_per_action_dim=bounds,
+        )
+        proposal_step = torch.tensor([0.9, -0.9, 0.0, 1.2, -1.2, 0.0])
+        proposal = proposal_step.repeat(10).unsqueeze(0)
+        lower, upper = actor.residual_reachable_interval(proposal)
+
+        expected_lower = torch.tensor([0.6, -1.0, -0.18, 0.6, -1.0, -0.9])
+        expected_upper = torch.tensor([1.0, -0.65, 0.18, 1.0, -0.65, 0.9])
+        assert torch.allclose(lower, expected_lower.repeat(10).unsqueeze(0))
+        assert torch.allclose(upper, expected_upper.repeat(10).unsqueeze(0))
+
+        inside = (lower + upper) / 2
+        assert torch.equal(actor.project_to_residual_support(proposal, inside), inside)
+
+        outside = torch.full_like(proposal, 2.0)
+        assert torch.equal(actor.project_to_residual_support(proposal, outside), upper)
+
     def test_per_action_dim_delta_scale_validates_chunk_width(self):
         with pytest.raises(ValueError, match="must be divisible"):
             ChunkActor(

@@ -473,6 +473,14 @@ def _ensure_human_inloop_compatible_features(
         "shape": (len(action_feature_names),),
         "names": action_feature_names,
     }
+    # The selected command before the robot driver's final safety clipping.
+    # ``action`` itself is reserved for the value returned by send_action(),
+    # i.e. the command that was physically sent to the motors.
+    dataset_features["complementary_info.requested_action"] = {
+        "dtype": "float32",
+        "shape": (len(action_feature_names),),
+        "names": action_feature_names,
+    }
     dataset_features["complementary_info.is_intervention"] = {
         "dtype": "float32",
         "shape": (1,),
@@ -534,7 +542,20 @@ def _write_schema_metadata(
             "rl_intervals": "List of {start_frame, end_frame, outcome} for each RL phase.",
             "human_intervention_intervals": "List of {start_frame, end_frame} for each human intervention segment.",
         }
-    dataset.meta.info["recording_schema_version"] = 3 if reason_info is not None else 2
+    requested_info = dataset.meta.info["features"].get(
+        "complementary_info.requested_action"
+    )
+    if requested_info is not None:
+        dataset.meta.info["recording_schema_version"] = 4
+        dataset.meta.info["action_recording_semantics"] = {
+            "action": "robot.send_action return value (actual sent action)",
+            "complementary_info.requested_action": (
+                "selected command before final robot-driver clipping"
+            ),
+            "complementary_info.policy_action": "policy proposal",
+        }
+    else:
+        dataset.meta.info["recording_schema_version"] = 3 if reason_info is not None else 2
     write_info(dataset.meta.info, dataset.root)
 
 
@@ -666,6 +687,17 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 logging.warning(
                     "Resuming a recording_schema_version<=2 dataset without "
                     "intervention_reason; appended frames retain legacy credit semantics."
+                )
+            if "complementary_info.requested_action" not in dataset.features:
+                # Do not create a dataset whose ``action`` column changes
+                # meaning halfway through. Legacy resumes keep recording the
+                # pre-clipping request and remain explicitly detectable by the
+                # absence of requested_action.
+                dataset_features.pop("complementary_info.requested_action", None)
+                logging.warning(
+                    "Resuming a legacy dataset without requested_action; appended "
+                    "frames retain legacy pre-clipping action semantics. Start a "
+                    "new dataset to record actual-sent actions."
                 )
             sanity_check_dataset_robot_compatibility(dataset, robot, cfg.dataset.fps, dataset_features)
         else:
