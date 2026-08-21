@@ -66,6 +66,15 @@ def _without_keys(value: dict[str, Any], ignored: set[str]) -> dict[str, Any]:
     return {key: item for key, item in value.items() if key not in ignored}
 
 
+def _canonical_policy_config(config: dict[str, Any]) -> dict[str, Any]:
+    canonical = copy.deepcopy(config)
+    anchors = canonical.get("corrective_risk_horizon_anchors")
+    legacy = canonical.get("corrective_risk_horizon_chunks")
+    if anchors is not None and legacy is not None and anchors == legacy:
+        canonical.pop("corrective_risk_horizon_anchors", None)
+    return canonical
+
+
 def _normalized_train_config(config: dict[str, Any]) -> dict[str, Any]:
     normalized = copy.deepcopy(config)
     for key in (
@@ -81,12 +90,26 @@ def _normalized_train_config(config: dict[str, Any]) -> dict[str, Any]:
     policy = normalized.get("policy", {})
     for key in ALLOWED_CONFIG_DIFFERENCES:
         policy.pop(key, None)
+    normalized["policy"] = _canonical_policy_config(policy)
     return normalized
 
 
 def _artifact_hash(path_value: str, filename: str) -> str:
     path = Path(path_value).expanduser()
     artifact = path if path.is_file() else path / filename
+    if not artifact.is_file():
+        # Training may run from the mirrored /save checkout while an audit runs
+        # from the robot/workstation checkout.  Resolve only the same repository-
+        # relative artifact; never rewrite checkpoint configuration globally.
+        server_root = Path("/save/zhangtianyi/catkin_ws/src/Evo-RLT")
+        try:
+            relative = path.relative_to(server_root)
+        except ValueError:
+            relative = None
+        if relative is not None:
+            repository_root = Path(__file__).resolve().parents[3]
+            mirrored = repository_root / relative
+            artifact = mirrored if mirrored.is_file() else mirrored / filename
     if not artifact.is_file():
         raise FileNotFoundError(f"matched-run artifact unavailable: {artifact}")
     return _sha256_file(artifact)
@@ -113,10 +136,13 @@ def validate_matched_actor_refine(
         mismatches.append("checkpoint A trust mode is not fixed")
     if config_b.get("actor_q_trust_mode", "fixed") != "fixed":
         mismatches.append("checkpoint B trust mode is not fixed")
+    comparable_a = _canonical_policy_config(config_a)
+    comparable_b = _canonical_policy_config(config_b)
     config_differences = {
-        key: (config_a.get(key), config_b.get(key))
-        for key in sorted(set(config_a) | set(config_b))
-        if key not in ALLOWED_CONFIG_DIFFERENCES and config_a.get(key) != config_b.get(key)
+        key: (comparable_a.get(key), comparable_b.get(key))
+        for key in sorted(set(comparable_a) | set(comparable_b))
+        if key not in ALLOWED_CONFIG_DIFFERENCES
+        and comparable_a.get(key) != comparable_b.get(key)
     }
     if config_differences:
         mismatches.append(f"algorithm/training config differs: {config_differences}")
