@@ -160,6 +160,7 @@ def test_transition_cache_v2_semantic_builder_uses_exec_action_c_step_and_reward
         frame_stride=1,
         episode_success=True,
         ep_id=7,
+        fps=25.0,
     )
 
     assert len(transitions) == 2
@@ -178,6 +179,9 @@ def test_transition_cache_v2_semantic_builder_uses_exec_action_c_step_and_reward
     assert torch.equal(transitions[0].reward_seq, torch.zeros(C))
     assert torch.equal(transitions[1].reward_seq, torch.tensor([0.0, 0.0, 1.0]))
     assert transitions[1].episode_id.item() == 7
+    assert transitions[0].anchor_start_frame.item() == 0
+    assert transitions[0].frame_stride.item() == 1
+    assert transitions[0].fps.item() == pytest.approx(25.0)
 
 
 def test_transition_cache_v2_demo_executed_mode_uses_expert_bc_target():

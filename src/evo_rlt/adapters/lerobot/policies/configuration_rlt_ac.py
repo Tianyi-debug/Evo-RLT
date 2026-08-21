@@ -113,6 +113,15 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     actor_teacher_pretrained_path: str = ""
     teacher_distillation_weight: float = 1.0
     human_bc_weight: float = 1.0
+    # Unified actor-only refinement objective.  These names are deliberately
+    # separate from the legacy teacher_bc knobs so old checkpoints retain
+    # their exact objective and serialization semantics.
+    actor_human_weight: float = 1.0
+    actor_teacher_weight: float = 1.0
+    actor_q_weight_max: float = 0.0
+    actor_q_trust_mode: str = "fixed"
+    corrective_risk_checkpoint: str = ""
+    corrective_risk_horizon_chunks: int = 3
     # Explicit opt-in. ``raw`` preserves every historical checkpoint/config;
     # ``residual_feasible`` projects source=3 targets only at loss time while
     # retaining the raw cache action for diagnostics and critic semantics.
@@ -239,11 +248,12 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             "mixed_ac",
             "human_bc",
             "teacher_bc",
+            "actor_refine",
             "critic_only",
         ):
             raise ValueError(
                 "training_stage must be 'mixed_ac', 'human_bc', 'teacher_bc', "
-                "or 'critic_only', "
+                "'actor_refine', or 'critic_only', "
                 f"got {self.training_stage!r}"
             )
         if self.source_sampling_weights is not None:
@@ -284,6 +294,17 @@ class ChunkACPolicyConfig(PreTrainedConfig):
             raise ValueError(
                 f"human_bc_weight must be non-negative, got {self.human_bc_weight}"
             )
+        if self.actor_human_weight < 0 or self.actor_teacher_weight < 0:
+            raise ValueError("actor_human_weight and actor_teacher_weight must be non-negative")
+        if self.actor_q_weight_max < 0:
+            raise ValueError("actor_q_weight_max must be non-negative")
+        if self.actor_q_trust_mode not in ("fixed", "corrective_risk"):
+            raise ValueError(
+                "actor_q_trust_mode must be 'fixed' or 'corrective_risk', "
+                f"got {self.actor_q_trust_mode!r}"
+            )
+        if self.corrective_risk_horizon_chunks <= 0:
+            raise ValueError("corrective_risk_horizon_chunks must be positive")
         if self.human_bc_target_mode not in ("raw", "residual_feasible"):
             raise ValueError(
                 "human_bc_target_mode must be 'raw' or 'residual_feasible', "
@@ -304,6 +325,26 @@ class ChunkACPolicyConfig(PreTrainedConfig):
                 raise ValueError(
                     "teacher_bc is an actor-only Q=0 diagnostic stage; set "
                     "actor_q_weight=0"
+                )
+        if self.training_stage == "actor_refine":
+            if not self.actor_teacher_pretrained_path:
+                raise ValueError(
+                    "actor_refine requires actor_teacher_pretrained_path pointing "
+                    "to the frozen warmup AC pretrained_model directory"
+                )
+            if self.actor_human_weight + self.actor_teacher_weight <= 0:
+                raise ValueError(
+                    "actor_refine requires a positive actor_human_weight or "
+                    "actor_teacher_weight"
+                )
+            if self.actor_bc_weight_mode != "fixed":
+                raise ValueError(
+                    "actor_refine requires actor_bc_weight_mode='fixed' so old "
+                    "critic-disagreement BC weighting cannot contaminate Q trust"
+                )
+            if self.actor_q_trust_mode == "corrective_risk" and not self.corrective_risk_checkpoint:
+                raise ValueError(
+                    "corrective_risk trust requires corrective_risk_checkpoint"
                 )
         if (
             self.actor_bc_weight_mode == "disagreement"

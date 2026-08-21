@@ -817,6 +817,7 @@ def _encoded_episode_to_transitions(
     legacy_handoff_policy: str = "majority",
     actor_bc_mode: str = "legacy",
     exec_action_is_actual_sent: bool = False,
+    fps: float = 30.0,
 ) -> list[ChunkTransition]:
     if not (state_vecs.shape[0] == ref_chunks.shape[0] == exec_chunks.shape[0] == len(frame_indices)):
         raise ValueError(
@@ -838,6 +839,7 @@ def _encoded_episode_to_transitions(
         source=TRANSITION_SOURCE_DEMO,
         episode_id=ep_id,
         is_critical=1.0,
+        fps=fps,
     )
     for transition in transitions:
         transition.exec_action_is_actual_sent = torch.tensor(
@@ -1028,6 +1030,7 @@ def _encode_episode(
     legacy_handoff_policy: str,
     actor_bc_mode: str,
     exec_action_is_actual_sent: bool,
+    fps: float,
 ) -> list[ChunkTransition]:
     """Encode sampled episode frames and build paper-style C-step transitions."""
     if not frame_indices:
@@ -1092,6 +1095,7 @@ def _encode_episode(
         legacy_handoff_policy=legacy_handoff_policy,
         actor_bc_mode=actor_bc_mode,
         exec_action_is_actual_sent=exec_action_is_actual_sent,
+        fps=fps,
     )
 
 
@@ -1415,6 +1419,7 @@ def main() -> None:
                     legacy_handoff_policy=args.legacy_handoff_policy,
                     actor_bc_mode=args.actor_bc_mode,
                     exec_action_is_actual_sent=exec_action_is_actual_sent,
+                    fps=float(metadata.fps),
                 )
                 raw_transition_count = sum(
                     1

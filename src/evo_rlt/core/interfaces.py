@@ -153,6 +153,12 @@ class ChunkTransition:
     exec_action_is_actual_sent: torch.Tensor = field(
         default_factory=lambda: torch.tensor(0.0)
     )
+    # Temporal provenance for future-K chunk-anchor labels.  These fields are
+    # deliberately stored on every transition so downstream builders never
+    # have to guess the cache stride or frame rate from a command line.
+    anchor_start_frame: torch.Tensor = field(default_factory=lambda: torch.tensor(-1))
+    frame_stride: torch.Tensor = field(default_factory=lambda: torch.tensor(-1))
+    fps: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
 
     def __post_init__(self) -> None:
         # Old caches only contain ref_chunk. They remain loadable, but a human

@@ -37,6 +37,12 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.actor_teacher_pretrained_path == ""
     assert config.teacher_distillation_weight == pytest.approx(1.0)
     assert config.human_bc_weight == pytest.approx(1.0)
+    assert config.actor_human_weight == pytest.approx(1.0)
+    assert config.actor_teacher_weight == pytest.approx(1.0)
+    assert config.actor_q_weight_max == pytest.approx(0.0)
+    assert config.actor_q_trust_mode == "fixed"
+    assert config.corrective_risk_checkpoint == ""
+    assert config.corrective_risk_horizon_chunks == 3
 
 
 def test_per_action_dim_delta_scale_validates_action_shape():
@@ -251,6 +257,44 @@ def test_teacher_bc_config_validates_and_round_trips(tmp_path):
         ChunkACPolicyConfig(
             training_stage="teacher_bc",
             actor_teacher_pretrained_path="/tmp/warmup/pretrained_model",
+        )
+
+
+def test_actor_refine_config_validates_fixed_and_future_risk_modes(tmp_path):
+    teacher = "/tmp/warmup/pretrained_model"
+    config = ChunkACPolicyConfig(
+        training_stage="actor_refine",
+        actor_teacher_pretrained_path=teacher,
+        actor_human_weight=0.75,
+        actor_teacher_weight=1.25,
+        actor_q_weight_max=0.25,
+        actor_q_trust_mode="fixed",
+    )
+    config.save_pretrained(tmp_path)
+    loaded = PreTrainedConfig.from_pretrained(tmp_path)
+    assert loaded.training_stage == "actor_refine"
+    assert loaded.actor_q_weight_max == pytest.approx(0.25)
+    assert loaded.actor_q_trust_mode == "fixed"
+
+    with pytest.raises(ValueError, match="actor_teacher_pretrained_path"):
+        ChunkACPolicyConfig(training_stage="actor_refine")
+    with pytest.raises(ValueError, match="actor_q_weight_max"):
+        ChunkACPolicyConfig(
+            training_stage="actor_refine",
+            actor_teacher_pretrained_path=teacher,
+            actor_q_weight_max=-0.1,
+        )
+    with pytest.raises(ValueError, match="corrective_risk_checkpoint"):
+        ChunkACPolicyConfig(
+            training_stage="actor_refine",
+            actor_teacher_pretrained_path=teacher,
+            actor_q_trust_mode="corrective_risk",
+        )
+    with pytest.raises(ValueError, match="actor_bc_weight_mode='fixed'"):
+        ChunkACPolicyConfig(
+            training_stage="actor_refine",
+            actor_teacher_pretrained_path=teacher,
+            actor_bc_weight_mode="disagreement",
         )
     with pytest.raises(ValueError, match="teacher_distillation_weight"):
         ChunkACPolicyConfig(teacher_distillation_weight=-1.0)

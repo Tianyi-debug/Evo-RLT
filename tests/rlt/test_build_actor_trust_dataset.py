@@ -31,7 +31,11 @@ def _row(
         "state_vec": torch.arange(10, dtype=torch.float32) + value,
         "proposal_chunk": torch.full((2, 2), value),
         "exec_chunk": torch.full((2, 2), value + 1),
+        "bc_target_chunk": torch.full((2, 2), value + 1),
         "exec_action_is_actual_sent": torch.tensor(float(episode_id % 2 == 0)),
+        "anchor_start_frame": torch.tensor(-1),
+        "frame_stride": torch.tensor(2),
+        "fps": torch.tensor(25.0),
     }
 
 
@@ -44,6 +48,12 @@ def _write_cache(root: Path) -> None:
     rows += [_row(2, 2, bc_valid=True, value=80 + index) for index in range(10)]
     rows += [_row(3, 2, bc_valid=False, value=100 + index) for index in range(9)]
     rows += [_row(4, 0, bc_valid=True, value=120 + index) for index in range(5)]
+    episode_offsets: dict[int, int] = {}
+    for row in rows:
+        episode_id = int(row["episode_id"].item())
+        offset = episode_offsets.get(episode_id, 0)
+        row["anchor_start_frame"] = torch.tensor(offset * 2)
+        episode_offsets[episode_id] = offset + 1
     torch.save(rows[:25], root / "chunk_transitions_train.pt")
     torch.save(rows[25:], root / "chunk_transitions_val.pt")
 
@@ -78,6 +88,10 @@ def test_future_k_samples_respect_typed_takeover_semantics(tmp_path: Path):
     assert all(sample["label_mask"].item() == 0 for sample in failure)
     assert samples[0]["z_rl"].shape == (8,)
     assert samples[0]["proprio"].shape == (2,)
+    assert samples[0]["action_semantics"] in {
+        "actual_sent",
+        "requested_or_pre_clipping_legacy",
+    }
 
 
 def test_split_is_episode_safe_and_output_refuses_overwrite(tmp_path: Path):
@@ -95,14 +109,17 @@ def test_split_is_episode_safe_and_output_refuses_overwrite(tmp_path: Path):
         ks=[1, 3, 5],
         primary_k=3,
         proprio_dim=2,
-        chunk_length=2,
-        frame_stride=1,
         val_fraction=0.5,
         split_seed=1000,
     )
     assert metadata["dimensions"]["z_rl_dim"] == 8
+    assert metadata["semantics"]["frame_stride"] == 2
+    assert metadata["semantics"]["fps"] == pytest.approx(25.0)
+    assert metadata["semantics"]["horizon_seconds"]["k3"] == pytest.approx(0.24)
+    assert metadata["inputs"][0]["cache_sha256"]
     assert (output / "actor_trust_train.pt").is_file()
     assert (output / "actor_trust_val.pt").is_file()
+    assert (output / "human_audit_val.pt").is_file()
     assert (output / "metadata.json").is_file()
     with pytest.raises(FileExistsError):
         build_actor_trust_dataset(
@@ -111,8 +128,19 @@ def test_split_is_episode_safe_and_output_refuses_overwrite(tmp_path: Path):
             ks=[3],
             primary_k=3,
             proprio_dim=2,
-            chunk_length=2,
-            frame_stride=1,
             val_fraction=0.5,
             split_seed=1000,
         )
+
+
+def test_duplicate_cache_contents_are_rejected(tmp_path: Path):
+    cache_a = tmp_path / "cache_a"
+    cache_b = tmp_path / "cache_b"
+    cache_a.mkdir()
+    cache_b.mkdir()
+    _write_cache(cache_a)
+    for filename in ("chunk_transitions_train.pt", "chunk_transitions_val.pt"):
+        (cache_b / filename).write_bytes((cache_a / filename).read_bytes())
+
+    with pytest.raises(ValueError, match="duplicate transition-cache contents"):
+        load_episode_groups([cache_a, cache_b])

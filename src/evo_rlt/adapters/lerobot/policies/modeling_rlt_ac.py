@@ -28,6 +28,7 @@ from evo_rlt.adapters.lerobot.policies.vla_backbone import (
 )
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
+from evo_rlt.core.corrective_risk import load_corrective_risk_checkpoint
 from evo_rlt.core.losses import (
     actor_loss_with_diagnostics,
     critic_loss_with_diagnostics,
@@ -163,7 +164,7 @@ class ChunkACPolicy(PreTrainedPolicy):
         for p in self.target_critic.parameters():
             p.requires_grad = False
         self.target_critic.eval()
-        if config.training_stage in {"human_bc", "teacher_bc"}:
+        if config.training_stage in {"human_bc", "teacher_bc", "actor_refine"}:
             for p in self.critic.parameters():
                 p.requires_grad = False
         elif config.training_stage == "critic_only":
@@ -174,6 +175,12 @@ class ChunkACPolicy(PreTrainedPolicy):
         self.register_buffer("_critic_step", torch.zeros((), dtype=torch.long), persistent=True)
         self.register_buffer("_human_bc_step", torch.zeros((), dtype=torch.long), persistent=True)
         self.register_buffer("_teacher_bc_step", torch.zeros((), dtype=torch.long), persistent=True)
+        self.register_buffer("_actor_refine_step", torch.zeros((), dtype=torch.long), persistent=True)
+        self.register_buffer(
+            "_actor_refine_batch_fingerprint",
+            torch.zeros((), dtype=torch.long),
+            persistent=True,
+        )
         self.register_buffer(
             "_actor_bc_tau_low_ema",
             torch.tensor(float(config.actor_bc_uncertainty_tau_low)),
@@ -190,6 +197,9 @@ class ChunkACPolicy(PreTrainedPolicy):
         # serialized into the student checkpoint. It is created lazily only by
         # the teacher_bc training path.
         object.__setattr__(self, "_teacher_actor", None)
+        # Like the frozen teacher, risk is an independently trained artifact.
+        # Keeping it unregistered prevents optimizer/checkpoint contamination.
+        object.__setattr__(self, "_corrective_risk_head", None)
 
         # Deploy-only: lazy build at .reset() time.
         self.modifier: RLTActionModifier | None = None
@@ -364,6 +374,8 @@ class ChunkACPolicy(PreTrainedPolicy):
             return self._forward_human_bc(tx)
         if training_stage == "teacher_bc":
             return self._forward_teacher_bc(tx)
+        if training_stage == "actor_refine":
+            return self._forward_actor_refine(tx)
 
         c_loss, critic_info = critic_loss_with_diagnostics(
             self.critic,
@@ -529,6 +541,36 @@ class ChunkACPolicy(PreTrainedPolicy):
         object.__setattr__(self, "_teacher_actor", teacher)
         log.info("Loaded frozen warmup actor teacher from %s", weights_path)
         return teacher
+
+    def _load_frozen_corrective_risk(self, like: Tensor):
+        risk_head = getattr(self, "_corrective_risk_head", None)
+        if risk_head is not None:
+            return risk_head
+        checkpoint = getattr(self.config, "corrective_risk_checkpoint", "")
+        if not checkpoint:
+            raise ValueError("corrective_risk trust requires corrective_risk_checkpoint")
+        risk_head, metadata = load_corrective_risk_checkpoint(checkpoint, freeze=True)
+        expected_state_dim = int(self.config.rl_token_dim + self.config.proprio_dim)
+        expected_action_dim = int(self.config.chunk_length * self.config.action_dim)
+        if risk_head.state_dim != expected_state_dim or risk_head.action_dim != expected_action_dim:
+            raise ValueError(
+                "corrective risk dimensions do not match actor_refine: "
+                f"risk=({risk_head.state_dim}, {risk_head.action_dim}), "
+                f"actor=({expected_state_dim}, {expected_action_dim})"
+            )
+        checkpoint_horizon = metadata.get("primary_future_k")
+        if checkpoint_horizon != int(self.config.corrective_risk_horizon_chunks):
+            raise ValueError(
+                "corrective risk horizon mismatch: "
+                f"checkpoint={checkpoint_horizon}, "
+                f"config={self.config.corrective_risk_horizon_chunks}"
+            )
+        risk_head.to(device=like.device, dtype=like.dtype)
+        for parameter in risk_head.parameters():
+            parameter.requires_grad_(False)
+        risk_head.eval()
+        object.__setattr__(self, "_corrective_risk_head", risk_head)
+        return risk_head
 
     @staticmethod
     def _teacher_supervision_masks(tx: dict[str, Tensor]) -> dict[str, Tensor]:
@@ -752,6 +794,132 @@ class ChunkACPolicy(PreTrainedPolicy):
             raw_info[f"teacher_{category}_student_drift_rmse"] = (
                 self._masked_scalar_mean(student_teacher_mse, mask).sqrt()
             )
+        return loss, self._finalize_diagnostics(raw_info)
+
+    def _forward_actor_refine(self, tx: dict[str, Tensor]) -> tuple[Tensor, dict[str, Any]]:
+        """Unified frozen-teacher + human BC + optional trusted Q objective."""
+        masks = self._teacher_supervision_masks(tx)
+        cache_index = tx.get("cache_index")
+        if cache_index is None:
+            raise KeyError("actor_refine requires stable cache_index for matched-run auditing")
+        q_mask_value = tx.get("actor_q_mask")
+        if q_mask_value is None:
+            raise KeyError("actor_refine requires actor_q_mask from a typed cache")
+        q_mask = q_mask_value.reshape(-1) > 0.5
+        proposal = tx["proposal_chunk_flat"]
+        student_mu, _ = self.actor.forward(tx["state_vec"], proposal, training=False)
+        teacher_actor = self._load_frozen_teacher_actor(student_mu)
+        with torch.no_grad():
+            teacher_mu, _ = teacher_actor.forward(tx["state_vec"], proposal, training=False)
+
+        raw_human_target = tx["bc_target_chunk_flat"]
+        if getattr(self.actor, "action_residual", False):
+            raw_human_target = raw_human_target.clamp(-1.0, 1.0)
+        feasible_human_target = self.actor.project_to_residual_support(
+            proposal,
+            raw_human_target,
+        )
+        human_target = (
+            feasible_human_target
+            if getattr(self.config, "human_bc_target_mode", "raw") == "residual_feasible"
+            else raw_human_target
+        )
+        human_per_sample = (student_mu - human_target).square().sum(dim=-1)
+        teacher_per_sample = (student_mu - teacher_mu).square().sum(dim=-1)
+        human_raw = self._masked_scalar_mean(human_per_sample, masks["human"])
+        teacher_raw = self._masked_scalar_mean(teacher_per_sample, masks["teacher"])
+        human_weighted = float(self.config.actor_human_weight) * human_raw
+        teacher_weighted = float(self.config.actor_teacher_weight) * teacher_raw
+
+        trust_mode = self.config.actor_q_trust_mode
+        if trust_mode == "fixed":
+            trust = torch.ones(student_mu.shape[0], device=student_mu.device, dtype=student_mu.dtype)
+        elif trust_mode == "corrective_risk":
+            risk_head = self._load_frozen_corrective_risk(student_mu)
+            with torch.no_grad():
+                risk = risk_head(tx["state_vec"].detach(), student_mu.detach()).sigmoid()
+                trust = 1.0 - risk
+        else:
+            raise ValueError(f"unsupported actor_q_trust_mode {trust_mode!r}")
+        trust = trust.detach()
+
+        critic_parameters = list(self.critic.parameters())
+        original_requires_grad = [parameter.requires_grad for parameter in critic_parameters]
+        for parameter in critic_parameters:
+            parameter.requires_grad_(False)
+        try:
+            q1, q2 = self.critic(tx["state_vec"], student_mu)
+            q = torch.minimum(q1, q2).reshape(-1)
+        finally:
+            for parameter, requires_grad in zip(
+                critic_parameters, original_requires_grad, strict=True
+            ):
+                parameter.requires_grad_(requires_grad)
+
+        q_raw = -self._masked_scalar_mean(q, q_mask)
+        q_weight = float(self.config.actor_q_weight_max)
+        # The denominator is sum(actor_q_mask), never sum(trust).  This is the
+        # invariant that makes risk actually suppress aggregate Q pressure.
+        q_weighted = -self._masked_scalar_mean(q_weight * trust * q, q_mask)
+        loss = human_weighted + teacher_weighted + q_weighted
+        fingerprint = int(self._actor_refine_batch_fingerprint.item())
+        modulus = 9_223_372_036_854_775_783
+        for index in cache_index.detach().reshape(-1).cpu().tolist():
+            fingerprint = (fingerprint * 1_000_003 + int(index) + 1) % modulus
+        self._actor_refine_batch_fingerprint.fill_(fingerprint)
+        self._actor_refine_step += 1
+
+        selected_trust = trust[q_mask]
+        if selected_trust.numel():
+            trust_p10, trust_p50, trust_p90 = torch.quantile(
+                selected_trust,
+                torch.tensor([0.1, 0.5, 0.9], device=selected_trust.device),
+            ).unbind()
+            trust_mean = selected_trust.mean()
+        else:
+            trust_mean = trust_p10 = trust_p50 = trust_p90 = trust.new_zeros(())
+        student_teacher_mse = (student_mu.detach() - teacher_mu).square().mean(dim=-1)
+        student_human_mse = (
+            student_mu.detach() - human_target.detach()
+        ).square().mean(dim=-1)
+        raw_info: dict[str, Any] = {
+            "loss_total_step": loss.detach(),
+            "loss_actor_total": loss.detach(),
+            "loss_actor": loss.detach(),
+            "loss_actor_human": human_weighted.detach(),
+            "loss_actor_human_raw": human_raw.detach(),
+            "loss_actor_teacher": teacher_weighted.detach(),
+            "loss_actor_teacher_raw": teacher_raw.detach(),
+            "loss_actor_q_raw": q_raw.detach(),
+            "loss_actor_q_weighted": q_weighted.detach(),
+            "actor_q_weight_max": q_weight,
+            "actor_q_trust_mean": trust_mean.detach(),
+            "actor_q_trust_p10": trust_p10.detach(),
+            "actor_q_trust_p50": trust_p50.detach(),
+            "actor_q_trust_p90": trust_p90.detach(),
+            "actor_q_valid_frac": q_mask.float().mean(),
+            "human_valid_frac": masks["human"].float().mean(),
+            "teacher_valid_frac": masks["teacher"].float().mean(),
+            "actor_teacher_rmse": self._masked_scalar_mean(
+                student_teacher_mse, masks["teacher"]
+            ).sqrt(),
+            "actor_human_rmse": self._masked_scalar_mean(
+                student_human_mse, masks["human"]
+            ).sqrt(),
+            "actor_refine_step": self._actor_refine_step.detach().clone(),
+            "actor_refine_batch_fingerprint": (
+                self._actor_refine_batch_fingerprint.detach().clone()
+            ),
+            "actor_update": True,
+            "actor_refine_stage": True,
+            **self._human_projection_diagnostics(
+                mu=student_mu,
+                raw_target=raw_human_target,
+                feasible_target=feasible_human_target,
+                human_mask=masks["human"],
+            ),
+            **self._source_fraction_diagnostics(tx),
+        }
         return loss, self._finalize_diagnostics(raw_info)
 
     @staticmethod
@@ -1316,7 +1484,7 @@ class ChunkACPolicy(PreTrainedPolicy):
             critic_group["lr"] = float(critic_lr)
 
         training_stage = getattr(self.config, "training_stage", "mixed_ac")
-        if training_stage in {"human_bc", "teacher_bc"}:
+        if training_stage in {"human_bc", "teacher_bc", "actor_refine"}:
             return [actor_group]
         if training_stage == "critic_only":
             return [critic_group]
@@ -1332,6 +1500,9 @@ class ChunkACPolicy(PreTrainedPolicy):
         teacher = getattr(self, "_teacher_actor", None)
         if teacher is not None:
             teacher.to(*args, **kwargs)
+        risk_head = getattr(self, "_corrective_risk_head", None)
+        if risk_head is not None:
+            risk_head.to(*args, **kwargs)
         return self
 
     def cuda(self, device=None):
@@ -1340,6 +1511,9 @@ class ChunkACPolicy(PreTrainedPolicy):
         teacher = getattr(self, "_teacher_actor", None)
         if teacher is not None:
             teacher.cuda(device)
+        risk_head = getattr(self, "_corrective_risk_head", None)
+        if risk_head is not None:
+            risk_head.cuda(device)
         return self
 
     def cpu(self):
@@ -1348,6 +1522,9 @@ class ChunkACPolicy(PreTrainedPolicy):
         teacher = getattr(self, "_teacher_actor", None)
         if teacher is not None:
             teacher.cpu()
+        risk_head = getattr(self, "_corrective_risk_head", None)
+        if risk_head is not None:
+            risk_head.cpu()
         return self
 
     def train(self, mode: bool = True):
@@ -1358,4 +1535,7 @@ class ChunkACPolicy(PreTrainedPolicy):
         teacher = getattr(self, "_teacher_actor", None)
         if teacher is not None:
             teacher.eval()
+        risk_head = getattr(self, "_corrective_risk_head", None)
+        if risk_head is not None:
+            risk_head.eval()
         return self

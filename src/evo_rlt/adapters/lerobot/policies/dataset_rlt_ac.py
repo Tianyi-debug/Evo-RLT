@@ -174,11 +174,12 @@ class ChunkTransitionDataset(Dataset):
             "mixed_ac",
             "human_bc",
             "teacher_bc",
+            "actor_refine",
             "critic_only",
         ):
             raise ValueError(
                 "training_stage must be 'mixed_ac', 'human_bc', 'teacher_bc', "
-                "or 'critic_only', "
+                "'actor_refine', or 'critic_only', "
                 f"got {training_stage!r}"
             )
         if training_stage == "human_bc":

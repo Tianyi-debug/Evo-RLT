@@ -13,6 +13,10 @@ from safetensors.torch import save_file as save_safetensors_file
 from evo_rlt.adapters.lerobot.policies.modeling_rlt_ac import ChunkACPolicy
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
+from evo_rlt.core.corrective_risk import (
+    CorrectiveTakeoverRiskMLP,
+    save_corrective_risk_checkpoint,
+)
 
 
 def _head_only_policy(
@@ -44,6 +48,16 @@ def _head_only_policy(
         diagnostics_jsonl_path=diagnostics_jsonl_path,
         action_dim=2,
         human_bc_target_mode="raw",
+        human_bc_weight=1.0,
+        teacher_distillation_weight=1.0,
+        actor_human_weight=1.0,
+        actor_teacher_weight=1.0,
+        actor_q_weight_max=0.0,
+        actor_q_trust_mode="fixed",
+        corrective_risk_checkpoint="",
+        corrective_risk_horizon_chunks=3,
+        rl_token_dim=4,
+        proprio_dim=2,
     )
     policy.actor = ChunkActor(
         state_dim=6,
@@ -68,9 +82,15 @@ def _head_only_policy(
     policy.register_buffer("_critic_step", torch.zeros((), dtype=torch.long))
     policy.register_buffer("_human_bc_step", torch.zeros((), dtype=torch.long))
     policy.register_buffer("_teacher_bc_step", torch.zeros((), dtype=torch.long))
+    policy.register_buffer("_actor_refine_step", torch.zeros((), dtype=torch.long))
+    policy.register_buffer(
+        "_actor_refine_batch_fingerprint", torch.zeros((), dtype=torch.long)
+    )
     policy.register_buffer("_actor_bc_tau_low_ema", torch.tensor(0.0))
     policy.register_buffer("_actor_bc_tau_high_ema", torch.tensor(0.2))
     policy._diagnostics_jsonl_initialized = False
+    object.__setattr__(policy, "_teacher_actor", None)
+    object.__setattr__(policy, "_corrective_risk_head", None)
     return policy
 
 
@@ -250,6 +270,104 @@ def test_teacher_bc_rejects_cache_without_typed_masks():
 
     with pytest.raises(KeyError, match="actor_bc_mask"):
         policy.forward(_batch())
+
+
+def _configure_actor_refine(policy, tmp_path, *, q_weight: float = 0.0):
+    teacher_state = {
+        f"actor.{key}": value.detach().clone()
+        for key, value in policy.actor.state_dict().items()
+    }
+    teacher_dir = tmp_path / "teacher" / "pretrained_model"
+    teacher_dir.mkdir(parents=True, exist_ok=True)
+    save_safetensors_file(teacher_state, teacher_dir / "model.safetensors")
+    policy.config.training_stage = "actor_refine"
+    policy.config.actor_bc_weight_mode = "fixed"
+    policy.config.actor_teacher_pretrained_path = str(teacher_dir)
+    policy.config.actor_q_weight_max = q_weight
+    for parameter in policy.critic.parameters():
+        parameter.requires_grad_(False)
+    batch = _batch()
+    batch["source"] = torch.tensor([0, 0, 1, 2, 2, 2, 2, 3])
+    batch["actor_bc_mask"] = torch.tensor([1, 1, 1, 1, 0, 0, 0, 1])
+    batch["actor_q_mask"] = torch.tensor([1, 1, 1, 1, 0, 0, 1, 0])
+    batch["intervention_reason"] = torch.tensor([0, 0, 0, 0, 0, 1, 2, 1])
+    batch["proposal_chunk"] = batch.pop("ref_chunk")
+    batch["next_proposal_chunk"] = batch.pop("next_ref_chunk")
+    batch["bc_target_chunk"] = batch["proposal_chunk"].clone()
+    batch["bc_target_chunk"][-1] += 0.1
+    return batch
+
+
+def test_actor_refine_q0_equals_teacher_human_and_fixed_q_math(tmp_path):
+    policy = _head_only_policy()
+    batch = _configure_actor_refine(policy, tmp_path, q_weight=0.0)
+    tx = policy._coerce_batch(batch)
+
+    q0_loss, q0_info = policy._forward_actor_refine(tx)
+    teacher_loss, _ = policy._forward_teacher_bc(tx)
+    assert q0_loss.item() == pytest.approx(teacher_loss.item(), abs=1e-7)
+    assert q0_info["loss_actor_q_weighted"] == pytest.approx(0.0)
+    assert q0_info["actor_q_trust_mean"] == pytest.approx(1.0)
+
+    policy.config.actor_q_weight_max = 0.25
+    fixed_loss, fixed_info = policy._forward_actor_refine(tx)
+    with torch.no_grad():
+        mu, _ = policy.actor(tx["state_vec"], tx["proposal_chunk_flat"], training=False)
+        q = policy.critic.min_q(tx["state_vec"], mu).reshape(-1)
+        mask = tx["actor_q_mask"].reshape(-1) > 0.5
+        expected_q = -0.25 * q[mask].mean()
+    assert fixed_info["loss_actor_q_weighted"] == pytest.approx(expected_q.item())
+    assert fixed_loss.item() == pytest.approx(q0_loss.item() + expected_q.item())
+
+
+def test_actor_refine_preserves_actor_q_gradient_and_freezes_other_heads(tmp_path):
+    policy = _head_only_policy()
+    batch = _configure_actor_refine(policy, tmp_path, q_weight=0.25)
+    loss, _ = policy.forward(batch)
+    loss.backward()
+
+    assert any(parameter.grad is not None for parameter in policy.actor.parameters())
+    assert all(parameter.grad is None for parameter in policy.critic.parameters())
+    assert all(parameter.grad is None for parameter in policy._teacher_actor.parameters())
+    assert list(policy.get_optim_params()[0]["params"]) == list(policy.actor.parameters())
+
+
+def test_corrective_risk_trust_is_per_sample_and_detached(tmp_path):
+    policy = _head_only_policy()
+    batch = _configure_actor_refine(policy, tmp_path, q_weight=0.25)
+    risk = CorrectiveTakeoverRiskMLP(state_dim=6, action_dim=4, hidden_dims=(8, 4))
+    with torch.no_grad():
+        for parameter in risk.parameters():
+            parameter.fill_(0.1)
+    risk_path = tmp_path / "risk.pt"
+    save_corrective_risk_checkpoint(
+        risk_path,
+        risk,
+        {"primary_future_k": 3, "normalization": "none"},
+    )
+    policy.config.actor_q_trust_mode = "corrective_risk"
+    policy.config.corrective_risk_checkpoint = str(risk_path)
+
+    loss, info = policy.forward(batch)
+    loss.backward()
+    loaded_risk = policy._corrective_risk_head
+    assert loaded_risk is not None
+    assert info["actor_q_trust_p10"] != pytest.approx(info["actor_q_trust_p90"])
+    assert all(parameter.grad is None for parameter in loaded_risk.parameters())
+    assert all(parameter.grad is None for parameter in policy.critic.parameters())
+    assert any(parameter.grad is not None for parameter in policy.actor.parameters())
+
+    toy_action = torch.tensor([[0.2, -0.4]], requires_grad=True)
+    toy_risk = torch.nn.Linear(2, 1, bias=False)
+    toy_risk.weight.data.copy_(torch.tensor([[1.5, -0.5]]))
+    direct_rho = toy_risk(toy_action).sigmoid()
+    assert torch.autograd.grad(direct_rho.sum(), toy_action, retain_graph=True)[0].abs().sum() > 0
+    with torch.no_grad():
+        detached_trust = 1.0 - toy_risk(toy_action.detach()).sigmoid()
+    objective = (detached_trust * toy_action.square().sum(dim=-1)).sum()
+    detached_gradient = torch.autograd.grad(objective, toy_action)[0]
+    assert torch.allclose(detached_gradient, 2.0 * detached_trust * toy_action)
+    assert all(parameter.grad is None for parameter in toy_risk.parameters())
 
 
 def test_ema_thresholds_are_used_before_batch_quantiles_update_them():

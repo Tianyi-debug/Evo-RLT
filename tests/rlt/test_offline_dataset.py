@@ -95,6 +95,9 @@ def test_semantic_v2_cache_serializes_explicit_bootstrap_mask_and_version(tmp_pa
 
     assert raw[0]["bootstrap_mask"].item() == 0.0
     assert raw[0]["cache_semantics_version"].item() == 2
+    assert raw[0]["anchor_start_frame"].item() == -1
+    assert raw[0]["frame_stride"].item() == -1
+    assert raw[0]["fps"].item() == 0.0
 
 
 def test_semantic_v2_cache_missing_bootstrap_mask_fails_fast(tmp_path):

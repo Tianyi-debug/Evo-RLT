@@ -10,6 +10,7 @@ proactive takeover are censored rather than labelled positive or negative.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 from collections import Counter, defaultdict
@@ -44,6 +45,7 @@ class EpisodeGroup:
     episode_id: int
     category: str
     autonomous_rows: tuple[dict[str, Any], ...]
+    human_rows: tuple[dict[str, Any], ...]
 
 
 def _scalar(row: dict[str, Any], key: str, default: int | float | None = None) -> int | float:
@@ -70,10 +72,12 @@ def _load_cache_rows(root: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def _classify_episode(rows: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
+def _classify_episode(
+    rows: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]], list[dict[str, Any]]]:
     sources = [int(_scalar(row, "source")) for row in rows]
     if set(sources) == {TRANSITION_SOURCE_DEMO}:
-        return None, []
+        return None, [], []
     if TRANSITION_SOURCE_DEMO in sources:
         raise ValueError("one episode mixes demo and online transition sources")
 
@@ -90,6 +94,11 @@ def _classify_episode(rows: list[dict[str, Any]]) -> tuple[str | None, list[dict
         row
         for row, source in zip(rows, sources, strict=True)
         if source in {TRANSITION_SOURCE_WARMUP_VLA, TRANSITION_SOURCE_RL_AUTONOMOUS}
+    ]
+    human = [
+        row
+        for row, source in zip(rows, sources, strict=True)
+        if source == TRANSITION_SOURCE_HUMAN_OVERRIDE
     ]
     if not autonomous:
         raise ValueError("online episode contains no autonomous anchors")
@@ -117,9 +126,9 @@ def _classify_episode(rows: list[dict[str, Any]]) -> tuple[str | None, list[dict
             )
         reason = next(iter(nonzero_reasons))
         if reason == CORRECTIVE_REASON:
-            return CORRECTIVE, autonomous
+            return CORRECTIVE, autonomous, human
         if reason == PROACTIVE_REASON:
-            return PROACTIVE, autonomous
+            return PROACTIVE, autonomous, human
         raise ValueError(f"unsupported intervention reason {reason}")
 
     if nonzero_reasons:
@@ -129,25 +138,91 @@ def _classify_episode(rows: list[dict[str, Any]]) -> tuple[str | None, list[dict
         )
     bc_masks = {int(float(_scalar(row, "actor_bc_mask")) > 0.5) for row in autonomous}
     if bc_masks == {1}:
-        return AUTONOMOUS_SUCCESS, autonomous
+        return AUTONOMOUS_SUCCESS, autonomous, human
     if bc_masks == {0}:
-        return AUTONOMOUS_FAILURE, autonomous
+        return AUTONOMOUS_FAILURE, autonomous, human
     raise ValueError(
         "unassisted episode has mixed actor_bc_mask values; rebuild the input cache "
         "with --actor-bc-mode outcome-aware"
     )
 
 
-def load_episode_groups(cache_roots: list[Path]) -> list[EpisodeGroup]:
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _cache_descriptor(root: Path) -> dict[str, str]:
+    resolved = root.expanduser().resolve(strict=True)
+    train = resolved / "chunk_transitions_train.pt"
+    val = resolved / "chunk_transitions_val.pt"
+    missing = [path for path in (train, val) if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(f"missing transition cache files: {missing}")
+    train_hash = _sha256_file(train)
+    val_hash = _sha256_file(val)
+    combined = hashlib.sha256(f"{train_hash}:{val_hash}".encode()).hexdigest()
+    return {
+        "resolved_path": str(resolved),
+        "train_sha256": train_hash,
+        "val_sha256": val_hash,
+        "cache_sha256": combined,
+    }
+
+
+def _cache_descriptors(cache_roots: list[Path]) -> list[dict[str, str]]:
+    descriptors = [_cache_descriptor(root) for root in cache_roots]
+    paths = [item["resolved_path"] for item in descriptors]
+    if len(paths) != len(set(paths)):
+        duplicates = sorted(path for path, count in Counter(paths).items() if count > 1)
+        raise ValueError(f"duplicate resolved cache roots are forbidden: {duplicates}")
+    hashes = [item["cache_sha256"] for item in descriptors]
+    if len(hashes) != len(set(hashes)):
+        duplicates = sorted(value for value, count in Counter(hashes).items() if count > 1)
+        raise ValueError(
+            "duplicate transition-cache contents are forbidden even under different paths: "
+            f"{duplicates}"
+        )
+    return descriptors
+
+
+def _validated_temporal_scalar(row: dict[str, Any], key: str) -> int | float:
+    if key not in row:
+        raise KeyError(
+            f"transition is missing {key!r}; rebuild it with the current "
+            "build_transition_cache_v2 before constructing actor-trust data"
+        )
+    return _scalar(row, key)
+
+
+def load_episode_groups(
+    cache_roots: list[Path],
+    *,
+    cache_descriptors: list[dict[str, str]] | None = None,
+) -> list[EpisodeGroup]:
+    descriptors = cache_descriptors or _cache_descriptors(cache_roots)
+    if len(descriptors) != len(cache_roots):
+        raise ValueError("cache descriptor count does not match cache roots")
     groups: list[EpisodeGroup] = []
     seen_uids: set[str] = set()
-    for cache_index, root in enumerate(cache_roots):
-        cache_id = f"cache{cache_index}:{root.name}"
+    for cache_index, (root, descriptor) in enumerate(zip(cache_roots, descriptors, strict=True)):
+        resolved = Path(descriptor["resolved_path"])
+        cache_id = f"cache{cache_index}:{resolved.name}:{descriptor['cache_sha256'][:12]}"
         by_episode: dict[int, list[dict[str, Any]]] = defaultdict(list)
-        for row in _load_cache_rows(root):
+        for row in _load_cache_rows(resolved):
             by_episode[int(_scalar(row, "episode_id"))].append(row)
         for episode_id, rows in by_episode.items():
-            category, autonomous = _classify_episode(rows)
+            rows.sort(key=lambda row: int(_validated_temporal_scalar(row, "anchor_start_frame")))
+            strides = {int(_validated_temporal_scalar(row, "frame_stride")) for row in rows}
+            frame_rates = {float(_validated_temporal_scalar(row, "fps")) for row in rows}
+            if len(strides) != 1 or next(iter(strides)) <= 0:
+                raise ValueError(f"episode {episode_id} has invalid/mixed frame_stride {strides}")
+            if len(frame_rates) != 1 or next(iter(frame_rates)) <= 0:
+                raise ValueError(f"episode {episode_id} has invalid/mixed fps {frame_rates}")
+            category, autonomous, human = _classify_episode(rows)
             if category is None:
                 continue
             uid = f"{cache_id}:episode{episode_id}"
@@ -161,6 +236,7 @@ def load_episode_groups(cache_roots: list[Path]) -> list[EpisodeGroup]:
                     episode_id=episode_id,
                     category=category,
                     autonomous_rows=tuple(autonomous),
+                    human_rows=tuple(human),
                 )
             )
     if not groups:
@@ -229,6 +305,9 @@ def build_samples(
             state_vec = _clone_float_tensor(transition, "state_vec").reshape(-1)
             proposal = _clone_float_tensor(transition, "proposal_chunk")
             exec_chunk = _clone_float_tensor(transition, "exec_chunk")
+            anchor_start_frame = int(_validated_temporal_scalar(transition, "anchor_start_frame"))
+            frame_stride = int(_validated_temporal_scalar(transition, "frame_stride"))
+            fps = float(_validated_temporal_scalar(transition, "fps"))
             if state_vec.numel() <= proprio_dim:
                 raise ValueError(
                     f"state_vec dim {state_vec.numel()} must exceed proprio_dim {proprio_dim}"
@@ -250,18 +329,37 @@ def build_samples(
                 "proprio": state_vec[-proprio_dim:].clone(),
                 "proposal_chunk": proposal,
                 "exec_chunk": exec_chunk,
+                # The classifier is trained on the autonomous behavior policy's
+                # composite action, never on the VLA proposal or human suffix.
+                "action_chunk": exec_chunk.clone(),
                 "episode_uid": group.uid,
                 "cache_id": group.cache_id,
                 "episode_id": group.episode_id,
                 "category": group.category,
                 "anchor_index": anchor_index,
+                "anchor_start_frame": anchor_start_frame,
                 "prefix_anchor_count": anchor_count,
                 "distance_to_event_anchors": distance if group.category in {CORRECTIVE, PROACTIVE} else -1,
+                "distance_to_corrective_event": distance if group.category == CORRECTIVE else -1,
+                "frame_stride": frame_stride,
+                "fps": fps,
                 "source": int(_scalar(transition, "source")),
+                "intervention_reason": int(_scalar(transition, "intervention_reason", 0)),
                 "exec_action_is_actual_sent": float(
                     _scalar(transition, "exec_action_is_actual_sent", 0.0)
                 ),
             }
+            sample["action_semantics"] = (
+                "actual_sent"
+                if sample["exec_action_is_actual_sent"] > 0.5
+                else "requested_or_pre_clipping_legacy"
+            )
+            actor_bc_mask = float(_scalar(transition, "actor_bc_mask", 0.0))
+            sample["bc_target_chunk"] = _clone_float_tensor(
+                transition,
+                "bc_target_chunk",
+            )
+            sample["bc_target_valid"] = actor_bc_mask
             for k in ks:
                 inside_window = distance <= k
                 if group.category == CORRECTIVE:
@@ -287,6 +385,58 @@ def build_samples(
             sample["label_mask"] = sample[f"label_mask_k{primary_k}"].clone()
             sample["censored"] = sample[f"censored_k{primary_k}"].clone()
             samples.append(sample)
+    return samples
+
+
+def build_human_audit_samples(
+    groups: list[EpisodeGroup],
+    *,
+    proprio_dim: int,
+) -> list[dict[str, Any]]:
+    """Retain held-out human rows for drift diagnostics, never risk training."""
+    samples: list[dict[str, Any]] = []
+    for group in groups:
+        for transition in group.human_rows:
+            state_vec = _clone_float_tensor(transition, "state_vec").reshape(-1)
+            if state_vec.numel() <= proprio_dim:
+                raise ValueError("human audit state_vec must contain RL-token and proprio")
+            proposal = _clone_float_tensor(transition, "proposal_chunk")
+            exec_chunk = _clone_float_tensor(transition, "exec_chunk")
+            actual_sent = float(_scalar(transition, "exec_action_is_actual_sent", 0.0))
+            samples.append(
+                {
+                    "state_vec": state_vec,
+                    "z_rl": state_vec[:-proprio_dim].clone(),
+                    "proprio": state_vec[-proprio_dim:].clone(),
+                    "proposal_chunk": proposal,
+                    "exec_chunk": exec_chunk,
+                    "action_chunk": exec_chunk.clone(),
+                    "bc_target_chunk": _clone_float_tensor(transition, "bc_target_chunk"),
+                    "bc_target_valid": 1.0,
+                    "episode_uid": group.uid,
+                    "cache_id": group.cache_id,
+                    "episode_id": group.episode_id,
+                    "category": "human",
+                    "anchor_start_frame": int(
+                        _validated_temporal_scalar(transition, "anchor_start_frame")
+                    ),
+                    "source": int(_scalar(transition, "source")),
+                    "intervention_reason": int(
+                        _scalar(transition, "intervention_reason", 0)
+                    ),
+                    "frame_stride": int(
+                        _validated_temporal_scalar(transition, "frame_stride")
+                    ),
+                    "fps": float(_validated_temporal_scalar(transition, "fps")),
+                    "exec_action_is_actual_sent": actual_sent,
+                    "action_semantics": (
+                        "actual_sent" if actual_sent > 0.5 else "requested_or_pre_clipping_legacy"
+                    ),
+                    "label": torch.tensor(0.0),
+                    "label_mask": torch.tensor(0.0),
+                    "censored": torch.tensor(1.0),
+                }
+            )
     return samples
 
 
@@ -324,16 +474,13 @@ def build_actor_trust_dataset(
     ks: list[int],
     primary_k: int,
     proprio_dim: int,
-    chunk_length: int,
-    frame_stride: int,
     val_fraction: float,
     split_seed: int,
 ) -> dict[str, Any]:
     if output_dir.exists():
         raise FileExistsError(f"output directory already exists: {output_dir}")
-    if chunk_length <= 0 or frame_stride <= 0:
-        raise ValueError("chunk_length and frame_stride must be positive")
-    groups = load_episode_groups(cache_roots)
+    descriptors = _cache_descriptors(cache_roots)
+    groups = load_episode_groups(cache_roots, cache_descriptors=descriptors)
     train_groups, val_groups = split_episode_groups(
         groups,
         val_fraction=val_fraction,
@@ -351,6 +498,8 @@ def build_actor_trust_dataset(
         primary_k=primary_k,
         proprio_dim=proprio_dim,
     )
+    train_human_samples = build_human_audit_samples(train_groups, proprio_dim=proprio_dim)
+    val_human_samples = build_human_audit_samples(val_groups, proprio_dim=proprio_dim)
     train_uids = {group.uid for group in train_groups}
     val_uids = {group.uid for group in val_groups}
     if train_uids & val_uids:
@@ -360,25 +509,43 @@ def build_actor_trust_dataset(
     all_samples = train_samples + val_samples
     if not all_samples:
         raise ValueError("actor-trust dataset contains no autonomous anchors")
-    observed_chunk_length = int(all_samples[0]["proposal_chunk"].shape[0])
-    if observed_chunk_length != chunk_length:
-        raise ValueError(
-            f"cache chunk length is {observed_chunk_length}, expected {chunk_length}"
-        )
+    chunk_shapes = {tuple(sample["action_chunk"].shape) for sample in all_samples}
+    frame_strides = {int(sample["frame_stride"]) for sample in all_samples}
+    frame_rates = {float(sample["fps"]) for sample in all_samples}
+    if len(chunk_shapes) != 1:
+        raise ValueError(f"mixed action chunk shapes are unsupported: {sorted(chunk_shapes)}")
+    if len(frame_strides) != 1:
+        raise ValueError(f"mixed frame_stride values are unsupported: {sorted(frame_strides)}")
+    if len(frame_rates) != 1:
+        raise ValueError(f"mixed fps values are unsupported: {sorted(frame_rates)}")
+    action_chunk_shape = next(iter(chunk_shapes))
+    frame_stride = next(iter(frame_strides))
+    fps = next(iter(frame_rates))
+    action_semantics_values = sorted({sample["action_semantics"] for sample in all_samples})
+    action_semantics = (
+        action_semantics_values[0]
+        if len(action_semantics_values) == 1
+        else "mixed:" + ",".join(action_semantics_values)
+    )
+    horizon_seconds = {f"k{k}": k * frame_stride / fps for k in ks}
     metadata: dict[str, Any] = {
-        "format_version": 1,
-        "inputs": [str(path.resolve()) for path in cache_roots],
+        "format_version": 2,
+        "inputs": descriptors,
         "semantics": {
             "primary_future_k": primary_k,
             "future_k_values": ks,
-            "chunk_length": chunk_length,
+            "chunk_length": action_chunk_shape[0],
             "frame_stride": frame_stride,
-            "fps": 30,
+            "fps": fps,
+            "horizon_seconds": horizon_seconds,
+            "horizon_formula": "future_k * frame_stride / fps",
+            "risk_action_input": "autonomous composite exec_chunk stored by the behavior policy",
+            "risk_action_semantics": action_semantics,
             "positive": "last K eligible autonomous anchors before corrective takeover",
             "negative": "earlier corrective/proactive prefix anchors and autonomous-success anchors",
             "proactive": "last K anchors are censored with label_mask=0",
             "autonomous_failure": "all anchors retained but excluded with label_mask=0",
-            "human": "human-controlled anchors are excluded",
+            "human": "excluded from risk loss; retained separately for drift-only audit",
             "split": f"episode-level stratified by cache and category, val_fraction={val_fraction}",
         },
         "dimensions": {
@@ -386,14 +553,23 @@ def build_actor_trust_dataset(
             "z_rl_dim": int(all_samples[0]["z_rl"].numel()),
             "proprio_dim": proprio_dim,
             "proposal_chunk_shape": list(all_samples[0]["proposal_chunk"].shape),
+            "action_chunk_shape": list(action_chunk_shape),
+            "action_flat_dim": int(all_samples[0]["action_chunk"].numel()),
         },
         "episodes": {
             "total": len(groups),
             "categories": dict(Counter(group.category for group in groups)),
             "train": len(train_groups),
             "val": len(val_groups),
+            "train_categories": dict(Counter(group.category for group in train_groups)),
+            "val_categories": dict(Counter(group.category for group in val_groups)),
             "train_uids": sorted(train_uids),
             "val_uids": sorted(val_uids),
+        },
+        "human_audit": {
+            "train_samples": len(train_human_samples),
+            "val_samples": len(val_human_samples),
+            "used_for_risk_training": False,
         },
         "train": _sample_counts(train_samples, ks),
         "val": _sample_counts(val_samples, ks),
@@ -403,6 +579,8 @@ def build_actor_trust_dataset(
     output_dir.mkdir(parents=True)
     torch.save(train_samples, output_dir / "actor_trust_train.pt")
     torch.save(val_samples, output_dir / "actor_trust_val.pt")
+    torch.save(train_human_samples, output_dir / "human_audit_train.pt")
+    torch.save(val_human_samples, output_dir / "human_audit_val.pt")
     (output_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False) + "\n"
     )
@@ -416,8 +594,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--future-k", nargs="+", type=int, default=[1, 3, 5])
     parser.add_argument("--primary-k", type=int, default=3)
     parser.add_argument("--proprio-dim", type=int, default=6)
-    parser.add_argument("--chunk-length", type=int, default=10)
-    parser.add_argument("--frame-stride", type=int, default=2)
     parser.add_argument("--val-fraction", type=float, default=0.2)
     parser.add_argument("--split-seed", type=int, default=1000)
     return parser.parse_args()
@@ -431,8 +607,6 @@ def main() -> None:
         ks=args.future_k,
         primary_k=args.primary_k,
         proprio_dim=args.proprio_dim,
-        chunk_length=args.chunk_length,
-        frame_stride=args.frame_stride,
         val_fraction=args.val_fraction,
         split_seed=args.split_seed,
     )

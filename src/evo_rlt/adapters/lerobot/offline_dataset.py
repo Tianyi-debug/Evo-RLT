@@ -124,6 +124,7 @@ def _encoded_to_transitions(
     source: int = 0,
     episode_id: int = -1,
     is_critical: float = 0.0,
+    fps: float = 30.0,
 ) -> list[ChunkTransition]:
     """Convert list of sampled anchors into chunk-level ChunkTransitions.
 
@@ -138,6 +139,8 @@ def _encoded_to_transitions(
         raise ValueError(
             f"chunk_length={chunk_length} must be divisible by stride={stride}"
         )
+    if fps <= 0:
+        raise ValueError(f"fps must be positive, got {fps}")
 
     frame_to_encoded_idx = {frame_idx: idx for idx, frame_idx in enumerate(frame_indices)}
     transitions: list[ChunkTransition] = []
@@ -175,6 +178,9 @@ def _encoded_to_transitions(
             bc_target_chunk=r,
             next_proposal_chunk=nr,
             cache_semantics_version=torch.tensor(TRANSITION_CACHE_SEMANTICS_VERSION),
+            anchor_start_frame=torch.tensor(start_frame, dtype=torch.long),
+            frame_stride=torch.tensor(stride, dtype=torch.long),
+            fps=torch.tensor(float(fps), dtype=torch.float32),
         ))
     if episode_success and transitions and not any(t.done.item() == 1.0 for t in transitions):
         raise ValueError(
@@ -337,6 +343,9 @@ def save_transition_cache(
             "intervention_reason": t.intervention_reason,
             "cache_semantics_version": t.cache_semantics_version,
             "exec_action_is_actual_sent": t.exec_action_is_actual_sent,
+            "anchor_start_frame": t.anchor_start_frame,
+            "frame_stride": t.frame_stride,
+            "fps": t.fps,
         }
         for t in transitions
     ]
