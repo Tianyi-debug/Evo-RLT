@@ -532,13 +532,24 @@ def build_actor_trust_dataset(
         "format_version": 2,
         "inputs": descriptors,
         "semantics": {
+            "primary_future_k_anchor_horizon": primary_k,
+            "future_k_anchor_horizons": ks,
+            "anchor_stride_frames": frame_stride,
+            "future_k_anchor_horizon_seconds": horizon_seconds,
+            "future_k_anchor_horizon_formula": (
+                "future_k_anchor_horizon * anchor_stride_frames / fps"
+            ),
+            "anchor_horizon_interpretation": (
+                "K counts overlapping cache anchors, not non-overlapping executed action chunks"
+            ),
+            # Backward-compatible aliases used by existing checkpoints and CLIs.
             "primary_future_k": primary_k,
             "future_k_values": ks,
             "chunk_length": action_chunk_shape[0],
             "frame_stride": frame_stride,
             "fps": fps,
             "horizon_seconds": horizon_seconds,
-            "horizon_formula": "future_k * frame_stride / fps",
+            "horizon_formula": "future_k * frame_stride / fps (cache-anchor units)",
             "risk_action_input": "autonomous composite exec_chunk stored by the behavior policy",
             "risk_action_semantics": action_semantics,
             "positive": "last K eligible autonomous anchors before corrective takeover",

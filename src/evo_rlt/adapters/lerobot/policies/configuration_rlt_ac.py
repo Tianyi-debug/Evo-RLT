@@ -121,7 +121,11 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     actor_q_weight_max: float = 0.0
     actor_q_trust_mode: str = "fixed"
     corrective_risk_checkpoint: str = ""
-    corrective_risk_horizon_chunks: int = 3
+    # K advances over transition-cache anchors.  It is not a count of
+    # non-overlapping executed action chunks.
+    corrective_risk_horizon_anchors: int = 3
+    # Legacy checkpoint/config alias.  New configs must use the anchor name.
+    corrective_risk_horizon_chunks: int | None = None
     # Explicit opt-in. ``raw`` preserves every historical checkpoint/config;
     # ``residual_feasible`` projects source=3 targets only at loss time while
     # retaining the raw cache action for diagnostics and critic semantics.
@@ -303,8 +307,21 @@ class ChunkACPolicyConfig(PreTrainedConfig):
                 "actor_q_trust_mode must be 'fixed' or 'corrective_risk', "
                 f"got {self.actor_q_trust_mode!r}"
             )
-        if self.corrective_risk_horizon_chunks <= 0:
-            raise ValueError("corrective_risk_horizon_chunks must be positive")
+        if self.corrective_risk_horizon_chunks is not None:
+            if (
+                self.corrective_risk_horizon_anchors != 3
+                and self.corrective_risk_horizon_anchors
+                != self.corrective_risk_horizon_chunks
+            ):
+                raise ValueError(
+                    "conflicting corrective risk horizons: use "
+                    "corrective_risk_horizon_anchors only"
+                )
+            self.corrective_risk_horizon_anchors = int(
+                self.corrective_risk_horizon_chunks
+            )
+        if self.corrective_risk_horizon_anchors <= 0:
+            raise ValueError("corrective_risk_horizon_anchors must be positive")
         if self.human_bc_target_mode not in ("raw", "residual_feasible"):
             raise ValueError(
                 "human_bc_target_mode must be 'raw' or 'residual_feasible', "

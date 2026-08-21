@@ -42,7 +42,8 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.actor_q_weight_max == pytest.approx(0.0)
     assert config.actor_q_trust_mode == "fixed"
     assert config.corrective_risk_checkpoint == ""
-    assert config.corrective_risk_horizon_chunks == 3
+    assert config.corrective_risk_horizon_anchors == 3
+    assert config.corrective_risk_horizon_chunks is None
 
 
 def test_per_action_dim_delta_scale_validates_action_shape():

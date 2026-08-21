@@ -15,7 +15,11 @@ RISK_CHECKPOINT_SCHEMA_VERSION = 1
 
 
 class CorrectiveTakeoverRiskMLP(nn.Module):
-    """Predict future corrective takeover risk from state and composite action."""
+    """Predict future corrective takeover risk from state and optional action.
+
+    ``action_dim=0`` is reserved for the matched state-only ablation.  The
+    production corrective-risk head always has a positive action dimension.
+    """
 
     def __init__(
         self,
@@ -24,8 +28,8 @@ class CorrectiveTakeoverRiskMLP(nn.Module):
         hidden_dims: tuple[int, int] = (256, 128),
     ) -> None:
         super().__init__()
-        if state_dim <= 0 or action_dim <= 0:
-            raise ValueError("state_dim and action_dim must be positive")
+        if state_dim <= 0 or action_dim < 0:
+            raise ValueError("state_dim must be positive and action_dim non-negative")
         if len(hidden_dims) != 2 or any(width <= 0 for width in hidden_dims):
             raise ValueError("hidden_dims must contain two positive widths")
         self.state_dim = int(state_dim)
@@ -39,16 +43,24 @@ class CorrectiveTakeoverRiskMLP(nn.Module):
             nn.Linear(self.hidden_dims[1], 1),
         )
 
-    def forward(self, state: Tensor, action: Tensor) -> Tensor:
+    def forward(self, state: Tensor, action: Tensor | None = None) -> Tensor:
         state = state.flatten(start_dim=1)
-        action = action.flatten(start_dim=1)
-        if state.shape[0] != action.shape[0]:
-            raise ValueError("state and action batch sizes differ")
         if state.shape[1] != self.state_dim:
             raise ValueError(f"expected state_dim={self.state_dim}, got {state.shape[1]}")
-        if action.shape[1] != self.action_dim:
-            raise ValueError(f"expected action_dim={self.action_dim}, got {action.shape[1]}")
-        return self.net(torch.cat((state, action), dim=-1)).squeeze(-1)
+        if self.action_dim == 0:
+            if action is not None and action.flatten(start_dim=1).shape[1] != 0:
+                raise ValueError("state-only risk head does not accept action features")
+            features = state
+        else:
+            if action is None:
+                raise ValueError("action-conditioned risk head requires action features")
+            action = action.flatten(start_dim=1)
+            if state.shape[0] != action.shape[0]:
+                raise ValueError("state and action batch sizes differ")
+            if action.shape[1] != self.action_dim:
+                raise ValueError(f"expected action_dim={self.action_dim}, got {action.shape[1]}")
+            features = torch.cat((state, action), dim=-1)
+        return self.net(features).squeeze(-1)
 
 
 def masked_risk_bce_with_logits(

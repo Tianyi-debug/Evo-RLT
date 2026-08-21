@@ -116,6 +116,10 @@ def test_split_is_episode_safe_and_output_refuses_overwrite(tmp_path: Path):
     assert metadata["semantics"]["frame_stride"] == 2
     assert metadata["semantics"]["fps"] == pytest.approx(25.0)
     assert metadata["semantics"]["horizon_seconds"]["k3"] == pytest.approx(0.24)
+    assert metadata["semantics"]["primary_future_k_anchor_horizon"] == 3
+    assert metadata["semantics"]["anchor_stride_frames"] == 2
+    assert metadata["semantics"]["future_k_anchor_horizon_seconds"]["k3"] == pytest.approx(0.24)
+    assert "not non-overlapping" in metadata["semantics"]["anchor_horizon_interpretation"]
     assert metadata["inputs"][0]["cache_sha256"]
     assert (output / "actor_trust_train.pt").is_file()
     assert (output / "actor_trust_val.pt").is_file()

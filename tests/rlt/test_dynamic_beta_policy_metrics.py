@@ -333,6 +333,9 @@ def test_actor_refine_preserves_actor_q_gradient_and_freezes_other_heads(tmp_pat
 
 
 def test_corrective_risk_trust_is_per_sample_and_detached(tmp_path):
+    # Keep this autograd assertion independent from RNG consumed by earlier
+    # training/audit tests in the same pytest process.
+    torch.manual_seed(1234)
     policy = _head_only_policy()
     batch = _configure_actor_refine(policy, tmp_path, q_weight=0.25)
     risk = CorrectiveTakeoverRiskMLP(state_dim=6, action_dim=4, hidden_dims=(8, 4))

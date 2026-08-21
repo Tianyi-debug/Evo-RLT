@@ -45,6 +45,14 @@ def test_corrective_risk_checkpoint_round_trip(tmp_path: Path):
     assert all(not parameter.requires_grad for parameter in loaded.parameters())
 
 
+def test_state_only_risk_head_has_no_action_input():
+    model = CorrectiveTakeoverRiskMLP(6, 0, hidden_dims=(8, 4))
+    state = torch.randn(5, 6)
+    assert model(state).shape == (5,)
+    with pytest.raises(ValueError, match="does not accept action"):
+        model(state, torch.randn(5, 1))
+
+
 def test_binary_risk_metrics_are_exact_for_perfect_ranking():
     metrics = binary_classification_metrics(
         torch.tensor([-4.0, -2.0, 2.0, 4.0]),

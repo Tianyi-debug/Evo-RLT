@@ -559,11 +559,18 @@ class ChunkACPolicy(PreTrainedPolicy):
                 f"actor=({expected_state_dim}, {expected_action_dim})"
             )
         checkpoint_horizon = metadata.get("primary_future_k")
-        if checkpoint_horizon != int(self.config.corrective_risk_horizon_chunks):
+        configured_horizon = int(
+            getattr(
+                self.config,
+                "corrective_risk_horizon_anchors",
+                getattr(self.config, "corrective_risk_horizon_chunks", 3),
+            )
+        )
+        if checkpoint_horizon != configured_horizon:
             raise ValueError(
-                "corrective risk horizon mismatch: "
+                "corrective risk cache-anchor horizon mismatch: "
                 f"checkpoint={checkpoint_horizon}, "
-                f"config={self.config.corrective_risk_horizon_chunks}"
+                f"config={configured_horizon}"
             )
         risk_head.to(device=like.device, dtype=like.dtype)
         for parameter in risk_head.parameters():

@@ -261,6 +261,17 @@ def train_corrective_risk(
         "seed": seed,
         "action_semantics": metadata["semantics"]["risk_action_semantics"],
         "primary_future_k": metadata["semantics"]["primary_future_k"],
+        "primary_future_k_anchor_horizon": metadata["semantics"].get(
+            "primary_future_k_anchor_horizon",
+            metadata["semantics"]["primary_future_k"],
+        ),
+        "anchor_stride_frames": metadata["semantics"].get(
+            "anchor_stride_frames",
+            metadata["semantics"]["frame_stride"],
+        ),
+        "anchor_horizon_interpretation": (
+            "short pre-takeover horizon over cache anchors; not executed action chunks"
+        ),
         "frame_stride": metadata["semantics"]["frame_stride"],
         "fps": metadata["semantics"]["fps"],
     }
