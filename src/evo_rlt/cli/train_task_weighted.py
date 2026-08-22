@@ -18,7 +18,7 @@ import logging
 import math
 import sys
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -184,12 +184,20 @@ def parse_wrapper_args(argv: Sequence[str]) -> tuple[TaskSamplingConfig, list[st
 class _TaskWeightedDataLoaderFactory:
     def __init__(self, original: Any, config: TaskSamplingConfig):
         self.original = original
+        self.original_init = original.__init__
         self.config = config
         self.applied = False
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+    def _prepare_args(
+        self, args: tuple[Any, ...], kwargs: dict[str, Any]
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
         if self.applied:
-            return self.original(*args, **kwargs)
+            return args, kwargs
+
+        # Avoid mutating a caller-owned dictionary. This also makes it safe for
+        # ``initialize`` to receive the kwargs dictionary created by Python for
+        # the patched ``DataLoader.__init__`` call.
+        kwargs = dict(kwargs)
 
         dataset = args[0] if args else kwargs.get("dataset")
         if dataset is None:
@@ -237,7 +245,32 @@ class _TaskWeightedDataLoaderFactory:
             self.config.audit_path.parent.mkdir(parents=True, exist_ok=True)
             self.config.audit_path.write_text(json.dumps(summary, indent=2) + "\n")
 
+        return args, kwargs
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        args, kwargs = self._prepare_args(args, kwargs)
         return self.original(*args, **kwargs)
+
+    def initialize(self, instance: Any, *args: Any, **kwargs: Any) -> None:
+        """Initialize a DataLoader while preserving DataLoader as a real type.
+
+        Accelerate evaluates ``isinstance(obj, torch.utils.data.DataLoader)``
+        while preparing distributed training. Replacing ``DataLoader`` with
+        this callable factory therefore breaks before training starts. Patching
+        only ``DataLoader.__init__`` keeps the class identity intact and still
+        lets us alter the first loader created by LeRobot.
+        """
+
+        args, kwargs = self._prepare_args(args, kwargs)
+        self.original_init(instance, *args, **kwargs)
+
+    def make_init_patch(self) -> Callable[..., None]:
+        """Return an unbound ``__init__`` wrapper suitable for a class."""
+
+        def patched_init(instance: Any, *args: Any, **kwargs: Any) -> None:
+            self.initialize(instance, *args, **kwargs)
+
+        return patched_init
 
 
 def main() -> None:
@@ -250,13 +283,14 @@ def main() -> None:
 
     from lerobot.scripts import lerobot_train
 
-    original_dataloader = torch.utils.data.DataLoader
-    factory = _TaskWeightedDataLoaderFactory(original_dataloader, config)
-    torch.utils.data.DataLoader = factory
+    dataloader_type = torch.utils.data.DataLoader
+    original_dataloader_init = dataloader_type.__init__
+    factory = _TaskWeightedDataLoaderFactory(dataloader_type, config)
+    dataloader_type.__init__ = factory.make_init_patch()
     try:
         lerobot_train.main()
     finally:
-        torch.utils.data.DataLoader = original_dataloader
+        dataloader_type.__init__ = original_dataloader_init
 
 
 if __name__ == "__main__":

@@ -85,6 +85,26 @@ def test_dataloader_factory_respects_eligible_indices_and_sampling_ratio() -> No
     assert set(sampled_indices).issubset(set(eligible))
 
 
+def test_patched_init_keeps_dataloader_usable_as_isinstance_type() -> None:
+    dataset = _ToyDataset([0, 0, 1, 1, 2, 2])
+    dataloader_type = torch.utils.data.DataLoader
+    original_init = dataloader_type.__init__
+    factory = _TaskWeightedDataLoaderFactory(
+        dataloader_type,
+        TaskSamplingConfig(weights=(0.3, 0.5, 0.2), seed=7),
+    )
+
+    dataloader_type.__init__ = factory.make_init_patch()
+    try:
+        loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=True)
+
+        # This is the exact type check Accelerate performs in _prepare_one.
+        assert isinstance(loader, torch.utils.data.DataLoader)
+        assert isinstance(loader.sampler, torch.utils.data.WeightedRandomSampler)
+    finally:
+        dataloader_type.__init__ = original_init
+
+
 def test_missing_task_is_rejected_instead_of_silently_renormalized() -> None:
     dataset = _ToyDataset([0, 0, 2, 2])
     with pytest.raises(ValueError, match="exactly match"):
