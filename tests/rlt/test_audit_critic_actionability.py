@@ -15,6 +15,7 @@ from evo_rlt.cli.audit_critic_actionability import (
     _virtual_q_update,
 )
 from evo_rlt.cli.audit_actor_q_mechanism import _canonical_policy_config
+from evo_rlt.cli.audit_matched_actor_refinement import _pair_summary
 from evo_rlt.core.actor import ChunkActor
 
 
@@ -203,3 +204,34 @@ def test_matched_config_canonicalizes_equal_legacy_horizon_alias():
         "corrective_risk_horizon_anchors": 3,
     }
     assert _canonical_policy_config(old) == _canonical_policy_config(new)
+
+
+def test_three_way_pair_summary_preserves_chunk_and_dimension_diagnostics():
+    records = [
+        {
+            "episode_uid": "e0",
+            "delta_action": torch.tensor([1.0, 2.0, 3.0, 4.0]),
+            "normalized_delta": torch.tensor([0.5, 1.0, 1.5, 2.0]),
+            "whole_chunk_l2": 30.0**0.5,
+            "q_delta": 0.2,
+        },
+        {
+            "episode_uid": "e1",
+            "delta_action": torch.tensor([2.0, 1.0, 4.0, 3.0]),
+            "normalized_delta": torch.tensor([1.0, 0.5, 2.0, 1.5]),
+            "whole_chunk_l2": 30.0**0.5,
+            "q_delta": -0.1,
+        },
+    ]
+    summary = _pair_summary(
+        records,
+        action_dim=2,
+        chunk_length=2,
+        seed=3,
+        bootstrap_reps=20,
+    )
+    assert summary["samples"] == 2
+    assert len(summary["shift_rmse_per_action_dimension"]) == 2
+    assert len(summary["shift_rmse_per_chunk_timestep"]) == 2
+    assert summary["gripper_dimension"] == 1
+    assert summary["fraction_q_delta_positive"] == 0.5
