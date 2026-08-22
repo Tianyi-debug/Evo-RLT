@@ -47,6 +47,7 @@ evo-rlt-audit-critic-actionability = "evo_rlt.cli.audit_critic_actionability:mai
 evo-rlt-audit-matched-actor-refinement = "evo_rlt.cli.audit_matched_actor_refinement:main"
 evo-rlt-train-actor-critic = "evo_rlt.cli.train_chunk_actor_critic:main"
 evo-rlt-train-rl-token = "evo_rlt.cli.train_rl_token:main"
+evo-rlt-train-task-weighted = "evo_rlt.cli.train_task_weighted:main"
 evo-rlt-collect-default = "evo_rlt.adapters.lerobot.record.cli:collect_default_main"
 evo-rlt-record = "evo_rlt.adapters.lerobot.record.cli:main"
 
