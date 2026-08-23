@@ -888,6 +888,51 @@ def test_full_auto_reset_pose_argv_can_be_disabled():
     assert build_auto_reset_pose_argv(args) == ["--auto_reset_pose=false"]
 
 
+def test_manifest_task3_gripper_release_is_forwarded(tmp_path):
+    pose_path = tmp_path / "home.json"
+    pose_path.write_text(json.dumps({"joint_pos": {"gripper.pos": 2.9}}))
+    args = SimpleNamespace(
+        auto_reset_pose=True,
+        reset_pose_duration_s=5.0,
+        reset_pose_path=None,
+        reset_pose_recapture=True,
+        reset_gripper_release=False,
+        reset_gripper_joint="gripper.pos",
+        reset_gripper_open_position=40.0,
+        reset_gripper_open_fraction=0.25,
+        reset_gripper_close_fraction=0.60,
+    )
+
+    runner.apply_manifest_reset_pose(
+        args,
+        {
+            "reset_pose": {
+                "locked": True,
+                "path": str(pose_path),
+                "gripper_release": {
+                    "enabled": True,
+                    "joint": "gripper.pos",
+                    "open_position": 42.0,
+                    "open_fraction": 0.30,
+                    "close_fraction": 0.70,
+                },
+            }
+        },
+    )
+
+    assert build_auto_reset_pose_argv(args) == [
+        "--auto_reset_pose=true",
+        "--reset_pose_duration_s=5.0",
+        "--reset_pose_recapture=false",
+        f"--reset_pose_path={pose_path}",
+        "--reset_gripper_release_enabled=true",
+        "--reset_gripper_joint=gripper.pos",
+        "--reset_gripper_open_position=42.0",
+        "--reset_gripper_open_fraction=0.3",
+        "--reset_gripper_close_fraction=0.7",
+    ]
+
+
 def test_full_vla_dry_run_accepts_headless_default_episode_success(tmp_path, capsys):
     for serial in ("left", "right"):
         cal_dir = tmp_path / "calibration" / serial

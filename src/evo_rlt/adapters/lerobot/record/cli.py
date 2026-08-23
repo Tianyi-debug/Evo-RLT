@@ -10,6 +10,14 @@ DEFAULT_COLLECT_DATASET_TAG = "vla_rlt_vla_test"
 DEFAULT_COLLECT_TASK = "Insert the copper screw into the black sleeve."
 
 
+def add_reset_gripper_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--reset-gripper-release", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--reset-gripper-joint", default="gripper.pos")
+    parser.add_argument("--reset-gripper-open-position", type=float, default=40.0)
+    parser.add_argument("--reset-gripper-open-fraction", type=float, default=0.25)
+    parser.add_argument("--reset-gripper-close-fraction", type=float, default=0.60)
+
+
 def add_common_record_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--initial-source", choices=["vla", "teleop"], required=True)
     parser.add_argument("--policy-path", default=None)
@@ -104,6 +112,7 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reset-pose-path", default=None)
     parser.add_argument("--reset-pose-duration-s", type=float, default=3.0)
     parser.add_argument("--reset-pose-recapture", action=argparse.BooleanOptionalAction, default=False)
+    add_reset_gripper_args(parser)
     parser.add_argument(
         "--deterministic",
         action=argparse.BooleanOptionalAction,
@@ -189,6 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     full.add_argument("--reset-pose-path", default=None)
     full.add_argument("--reset-pose-duration-s", type=float, default=3.0)
     full.add_argument("--reset-pose-recapture", action=argparse.BooleanOptionalAction, default=False)
+    add_reset_gripper_args(full)
     full.add_argument(
         "--resume-dataset-root",
         default=None,

@@ -104,6 +104,11 @@ def slow_reset_all_arms_to_pose(
     teleop: Any,
     target_pose: dict[str, float],
     duration_s: float = 3.0,
+    *,
+    gripper_joint: str | None = None,
+    gripper_open_position: float | None = None,
+    gripper_open_fraction: float = 0.25,
+    gripper_close_fraction: float = 0.60,
 ) -> None:
     joint_keys = [key for key in robot.action_features if key.endswith(".pos") and key in target_pose]
     if not joint_keys:
@@ -114,6 +119,22 @@ def slow_reset_all_arms_to_pose(
     start_pose = {key: current_pose.get(key, float(target_pose[key])) for key in joint_keys}
     goal_pose = {key: float(target_pose[key]) for key in joint_keys}
 
+    if gripper_joint is not None and gripper_open_position is not None:
+        if gripper_joint not in joint_keys:
+            logging.warning(
+                "Reset gripper release requested, but joint %s is absent from robot actions or reset pose.",
+                gripper_joint,
+            )
+            gripper_joint = None
+            gripper_open_position = None
+        else:
+            logging.info(
+                "Episode reset will open %s to %.2f, then close it to the stored pose value %.2f.",
+                gripper_joint,
+                gripper_open_position,
+                goal_pose[gripper_joint],
+            )
+
     if teleop is not None and not isinstance(teleop, list) and hasattr(teleop, "set_manual_control"):
         teleop.set_manual_control(False)
 
@@ -123,6 +144,23 @@ def slow_reset_all_arms_to_pose(
     for idx in range(1, steps + 1):
         alpha = idx / steps
         action = {key: start_pose[key] + (goal_pose[key] - start_pose[key]) * alpha for key in joint_keys}
+        if (
+            gripper_joint is not None
+            and gripper_open_position is not None
+            and gripper_joint in action
+        ):
+            if alpha <= gripper_open_fraction:
+                gripper_alpha = alpha / gripper_open_fraction
+                action[gripper_joint] = start_pose[gripper_joint] + (
+                    gripper_open_position - start_pose[gripper_joint]
+                ) * gripper_alpha
+            elif alpha < gripper_close_fraction:
+                action[gripper_joint] = gripper_open_position
+            else:
+                gripper_alpha = (alpha - gripper_close_fraction) / (1.0 - gripper_close_fraction)
+                action[gripper_joint] = gripper_open_position + (
+                    goal_pose[gripper_joint] - gripper_open_position
+                ) * gripper_alpha
         robot.send_action(action)
         if teleop_feedback_enabled:
             try:
@@ -145,12 +183,22 @@ class EpisodeResetPoseController:
         capture_if_missing: bool = True,
         recapture: bool = False,
         capture_fps: float = 30.0,
+        gripper_release_enabled: bool = False,
+        gripper_joint: str = "gripper.pos",
+        gripper_open_position: float = 40.0,
+        gripper_open_fraction: float = 0.25,
+        gripper_close_fraction: float = 0.60,
     ):
         self.pose_path = Path(pose_path).expanduser() if pose_path is not None else default_reset_pose_path(cfg)
         self.duration_s = float(duration_s)
         self.capture_if_missing = capture_if_missing
         self.recapture = recapture
         self.capture_fps = float(capture_fps)
+        self.gripper_release_enabled = bool(gripper_release_enabled)
+        self.gripper_joint = str(gripper_joint)
+        self.gripper_open_position = float(gripper_open_position)
+        self.gripper_open_fraction = float(gripper_open_fraction)
+        self.gripper_close_fraction = float(gripper_close_fraction)
         self.reset_pose: dict[str, float] | None = None
 
     def on_record_connected(self, robot: Any, teleop: Any) -> None:
@@ -193,4 +241,10 @@ class EpisodeResetPoseController:
                 teleop=teleop,
                 target_pose=self.reset_pose,
                 duration_s=self.duration_s,
+                gripper_joint=self.gripper_joint if self.gripper_release_enabled else None,
+                gripper_open_position=(
+                    self.gripper_open_position if self.gripper_release_enabled else None
+                ),
+                gripper_open_fraction=self.gripper_open_fraction,
+                gripper_close_fraction=self.gripper_close_fraction,
             )

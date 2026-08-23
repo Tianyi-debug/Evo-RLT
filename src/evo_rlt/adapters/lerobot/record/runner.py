@@ -1171,6 +1171,16 @@ def build_auto_reset_pose_argv(args: argparse.Namespace) -> list[str]:
     ]
     if args.reset_pose_path is not None:
         argv.append(f"--reset_pose_path={args.reset_pose_path}")
+    if getattr(args, "reset_gripper_release", False):
+        argv.extend(
+            [
+                "--reset_gripper_release_enabled=true",
+                f"--reset_gripper_joint={args.reset_gripper_joint}",
+                f"--reset_gripper_open_position={args.reset_gripper_open_position}",
+                f"--reset_gripper_open_fraction={args.reset_gripper_open_fraction}",
+                f"--reset_gripper_close_fraction={args.reset_gripper_close_fraction}",
+            ]
+        )
     return argv
 
 
@@ -1183,6 +1193,18 @@ def apply_manifest_reset_pose(args: argparse.Namespace, setup: dict[str, Any]) -
     pose_path_raw = reset_pose.get("path")
     if locked and not pose_path_raw:
         raise ValueError("Locked manifest reset_pose requires a non-empty 'path'.")
+    gripper_release = reset_pose.get("gripper_release")
+    if isinstance(gripper_release, dict):
+        args.reset_gripper_release = bool(gripper_release.get("enabled", False))
+        if "joint" in gripper_release:
+            args.reset_gripper_joint = str(gripper_release["joint"])
+        if "open_position" in gripper_release:
+            args.reset_gripper_open_position = float(gripper_release["open_position"])
+        if "open_fraction" in gripper_release:
+            args.reset_gripper_open_fraction = float(gripper_release["open_fraction"])
+        if "close_fraction" in gripper_release:
+            args.reset_gripper_close_fraction = float(gripper_release["close_fraction"])
+
     if not pose_path_raw:
         return
 

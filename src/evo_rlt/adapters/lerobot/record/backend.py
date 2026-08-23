@@ -319,6 +319,13 @@ class RecordConfig:
     reset_pose_capture_if_missing: bool = True
     # Re-capture the reset pose at startup even if `reset_pose_path` already exists.
     reset_pose_recapture: bool = False
+    # During an episode-end reset, open the gripper first to release a held object,
+    # then close it back to the gripper value stored in the reset pose.
+    reset_gripper_release_enabled: bool = False
+    reset_gripper_joint: str = "gripper.pos"
+    reset_gripper_open_position: float = 40.0
+    reset_gripper_open_fraction: float = 0.25
+    reset_gripper_close_fraction: float = 0.60
     # Unified schema always records step-level collector source ids.
     enable_collector_policy_id: bool = True
     # Numeric code used when the executed action comes from the primary policy.
@@ -436,6 +443,13 @@ class RecordConfig:
             self.default_episode_success = normalize_episode_success_label(self.default_episode_success)
         if self.reset_pose_duration_s <= 0:
             raise ValueError("`reset_pose_duration_s` must be > 0.")
+        if self.reset_gripper_release_enabled:
+            if not self.reset_gripper_joint.endswith(".pos"):
+                raise ValueError("`reset_gripper_joint` must end with '.pos'.")
+            if not 0 < self.reset_gripper_open_fraction < self.reset_gripper_close_fraction < 1:
+                raise ValueError(
+                    "Reset gripper fractions must satisfy 0 < open_fraction < close_fraction < 1."
+                )
 
         if not self.enable_collector_policy_id:
             raise ValueError("`enable_collector_policy_id` must stay true for the unified recording schema.")
@@ -657,6 +671,11 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             capture_if_missing=cfg.reset_pose_capture_if_missing,
             recapture=cfg.reset_pose_recapture,
             capture_fps=cfg.dataset.fps,
+            gripper_release_enabled=cfg.reset_gripper_release_enabled,
+            gripper_joint=cfg.reset_gripper_joint,
+            gripper_open_position=cfg.reset_gripper_open_position,
+            gripper_open_fraction=cfg.reset_gripper_open_fraction,
+            gripper_close_fraction=cfg.reset_gripper_close_fraction,
         )
         if cfg.auto_reset_pose
         else None

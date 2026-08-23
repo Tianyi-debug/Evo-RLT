@@ -1,0 +1,54 @@
+{
+  "datasets": {
+    "root": "/home/zty/catkin_ws/src/Evo-RLT/data"
+  },
+  "reset_pose": {
+    "locked": true,
+    "path": "/home/zty/catkin_ws/src/Evo-RLT/configs/so101_general_home_pose.json",
+    "gripper_release": {
+      "enabled": true,
+      "joint": "gripper.pos",
+      "open_position": 40.0,
+      "open_fraction": 0.25,
+      "close_fraction": 0.60
+    }
+  },
+  "arms": [
+    {
+      "alias": "solo_follower",
+      "type": "follower",
+      "model": "so101",
+      "lerobot_id": "my_awesome_follower_arm",
+      "port": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:10.2:1.0",
+      "calibration_dir": "/home/zty/.cache/huggingface/lerobot/calibration/robots/so101_follower"
+    },
+    {
+      "alias": "solo_leader",
+      "type": "leader",
+      "model": "so101",
+      "lerobot_id": "my_awesome_leader_arm",
+      "port": "/dev/serial/by-path/pci-0000:00:14.0-usb-0:2.2:1.0",
+      "calibration_dir": "/home/zty/.cache/huggingface/lerobot/calibration/teleoperators/so_leader"
+    }
+  ],
+  "cameras": [
+    {
+      "alias": "front",
+      "port": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:2.3:1.0-video-index0",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG",
+      "backend": "V4L2"
+    },
+    {
+      "alias": "top",
+      "port": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:10.3:1.0-video-index0",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "fourcc": "MJPG",
+      "backend": "V4L2"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from evo_rlt.adapters.lerobot.record.annotations import EPISODE_FAILURE, EPISODE_SUCCESS
 from evo_rlt.adapters.lerobot.record import reset_pose
 
@@ -142,6 +144,51 @@ def test_slow_reset_all_arms_to_pose_interpolates_and_feedbacks(monkeypatch):
     assert robot.sent_actions[-1] == {"motor_1.pos": 1.0, "motor_2.pos": -2.0}
     assert len(robot.sent_actions) > 1
     assert teleop.feedback[-1] == robot.sent_actions[-1]
+
+
+def test_slow_reset_can_open_then_close_gripper_during_return(monkeypatch):
+    robot = FakeRobot({"motor_1.pos": 0.0, "motor_2.pos": 0.0})
+    robot.action_features = {**robot.action_features, "gripper.pos": float}
+    robot.observation["gripper.pos"] = 3.0
+    monkeypatch.setattr(reset_pose.time, "sleep", lambda _: None)
+
+    reset_pose.slow_reset_all_arms_to_pose(
+        robot=robot,
+        teleop=None,
+        target_pose={"motor_1.pos": 10.0, "motor_2.pos": -5.0, "gripper.pos": 2.9},
+        duration_s=1.0,
+        gripper_joint="gripper.pos",
+        gripper_open_position=40.0,
+        gripper_open_fraction=0.25,
+        gripper_close_fraction=0.60,
+    )
+
+    gripper_positions = [action["gripper.pos"] for action in robot.sent_actions]
+    assert max(gripper_positions) == pytest.approx(40.0)
+    assert gripper_positions[-1] == pytest.approx(2.9)
+    assert robot.sent_actions[-1]["motor_1.pos"] == pytest.approx(10.0)
+    assert robot.sent_actions[-1]["motor_2.pos"] == pytest.approx(-5.0)
+
+
+def test_controller_only_releases_gripper_after_episode_outcome(tmp_path, monkeypatch):
+    pose_path = tmp_path / "existing_pose.json"
+    pose_path.write_text(json.dumps({"joint_pos": {"motor_1.pos": 3.0, "gripper.pos": 2.9}}))
+    controller = reset_pose.EpisodeResetPoseController(
+        cfg=object(),
+        pose_path=pose_path,
+        gripper_release_enabled=True,
+        gripper_open_position=40.0,
+    )
+    calls = []
+    monkeypatch.setattr(reset_pose, "slow_reset_all_arms_to_pose", lambda **kwargs: calls.append(kwargs))
+    robot = FakeRobot()
+
+    controller.on_record_connected(robot=robot, teleop=None)
+    controller.on_episode_outcome(robot=robot, teleop=None, episode_success=EPISODE_SUCCESS)
+
+    assert "gripper_joint" not in calls[0]
+    assert calls[1]["gripper_joint"] == "gripper.pos"
+    assert calls[1]["gripper_open_position"] == pytest.approx(40.0)
 
 
 def test_controller_resets_only_on_final_outcome(monkeypatch):
