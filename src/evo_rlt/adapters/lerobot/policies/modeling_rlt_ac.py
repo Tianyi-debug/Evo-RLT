@@ -804,7 +804,7 @@ class ChunkACPolicy(PreTrainedPolicy):
         return loss, self._finalize_diagnostics(raw_info)
 
     def _forward_actor_refine(self, tx: dict[str, Tensor]) -> tuple[Tensor, dict[str, Any]]:
-        """Unified frozen-teacher + human BC + optional trusted Q objective."""
+        """Optional supervised anchors plus a trusted-Q actor objective."""
         masks = self._teacher_supervision_masks(tx)
         cache_index = tx.get("cache_index")
         if cache_index is None:

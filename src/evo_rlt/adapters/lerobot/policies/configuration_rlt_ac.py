@@ -349,11 +349,11 @@ class ChunkACPolicyConfig(PreTrainedConfig):
                     "actor_refine requires actor_teacher_pretrained_path pointing "
                     "to the frozen warmup AC pretrained_model directory"
                 )
-            if self.actor_human_weight + self.actor_teacher_weight <= 0:
-                raise ValueError(
-                    "actor_refine requires a positive actor_human_weight or "
-                    "actor_teacher_weight"
-                )
+            # Both supervised weights may intentionally be zero for a pure-Q
+            # ablation.  In particular, Q=0 with both weights at zero is the
+            # strictly matched no-update control for that ablation.  The
+            # teacher checkpoint remains required for provenance and drift
+            # diagnostics, but contributes no gradient when its weight is zero.
             if self.actor_bc_weight_mode != "fixed":
                 raise ValueError(
                     "actor_refine requires actor_bc_weight_mode='fixed' so old "
