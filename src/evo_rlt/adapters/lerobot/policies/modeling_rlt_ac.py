@@ -375,6 +375,8 @@ class ChunkACPolicy(PreTrainedPolicy):
         if training_stage == "teacher_bc":
             return self._forward_teacher_bc(tx)
         if training_stage == "actor_refine":
+            if getattr(self.config, "actor_refine_objective", "teacher_q") == "td3bc":
+                return self._forward_actor_refine_td3bc(tx)
             return self._forward_actor_refine(tx)
 
         c_loss, critic_info = critic_loss_with_diagnostics(
@@ -803,8 +805,53 @@ class ChunkACPolicy(PreTrainedPolicy):
             )
         return loss, self._finalize_diagnostics(raw_info)
 
+    def _advance_actor_refine_audit(self, cache_index: Tensor) -> None:
+        fingerprint = int(self._actor_refine_batch_fingerprint.item())
+        modulus = 9_223_372_036_854_775_783
+        for index in cache_index.detach().reshape(-1).cpu().tolist():
+            fingerprint = (fingerprint * 1_000_003 + int(index) + 1) % modulus
+        self._actor_refine_batch_fingerprint.fill_(fingerprint)
+        self._actor_refine_step += 1
+
+    def _forward_actor_refine_td3bc(
+        self,
+        tx: dict[str, Tensor],
+    ) -> tuple[Tensor, dict[str, Any]]:
+        """Actor-only fixed-weight TD3+BC refinement with a frozen critic."""
+        cache_index = tx.get("cache_index")
+        if cache_index is None:
+            raise KeyError("td3bc actor_refine requires stable cache_index")
+        if tx.get("actor_bc_mask") is None or tx.get("actor_q_mask") is None:
+            raise KeyError(
+                "td3bc actor_refine requires actor_bc_mask and actor_q_mask "
+                "from a typed outcome-aware cache"
+            )
+
+        loss, actor_info = self._actor_loss_without_critic_grads(
+            tx,
+            q_weight=float(self.config.actor_q_weight_max),
+        )
+
+        self._advance_actor_refine_audit(cache_index)
+        raw_info = {
+            "loss_total_step": loss.detach(),
+            "loss_actor_total": loss.detach(),
+            "loss_actor": loss.detach(),
+            "actor_q_weight_max": float(self.config.actor_q_weight_max),
+            "actor_refine_step": self._actor_refine_step.detach().clone(),
+            "actor_refine_batch_fingerprint": (
+                self._actor_refine_batch_fingerprint.detach().clone()
+            ),
+            "actor_update": True,
+            "actor_refine_stage": True,
+            "actor_refine_td3bc": True,
+            **self._source_fraction_diagnostics(tx),
+            **actor_info,
+        }
+        return loss, self._finalize_diagnostics(raw_info)
+
     def _forward_actor_refine(self, tx: dict[str, Tensor]) -> tuple[Tensor, dict[str, Any]]:
-        """Optional supervised anchors plus a trusted-Q actor objective."""
+        """Frozen-teacher/human anchors plus an optional trusted-Q objective."""
         masks = self._teacher_supervision_masks(tx)
         cache_index = tx.get("cache_index")
         if cache_index is None:
@@ -869,12 +916,7 @@ class ChunkACPolicy(PreTrainedPolicy):
         # invariant that makes risk actually suppress aggregate Q pressure.
         q_weighted = -self._masked_scalar_mean(q_weight * trust * q, q_mask)
         loss = human_weighted + teacher_weighted + q_weighted
-        fingerprint = int(self._actor_refine_batch_fingerprint.item())
-        modulus = 9_223_372_036_854_775_783
-        for index in cache_index.detach().reshape(-1).cpu().tolist():
-            fingerprint = (fingerprint * 1_000_003 + int(index) + 1) % modulus
-        self._actor_refine_batch_fingerprint.fill_(fingerprint)
-        self._actor_refine_step += 1
+        self._advance_actor_refine_audit(cache_index)
 
         selected_trust = trust[q_mask]
         if selected_trust.numel():
@@ -1059,6 +1101,8 @@ class ChunkACPolicy(PreTrainedPolicy):
     def _actor_loss_without_critic_grads(
         self,
         tx: dict[str, Tensor],
+        *,
+        q_weight: float | None = None,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         critic_params = [p for p in self.critic.parameters() if p.requires_grad]
         for p in critic_params:
@@ -1070,7 +1114,11 @@ class ChunkACPolicy(PreTrainedPolicy):
                 self.critic,
                 tx,
                 beta=self.config.beta,
-                q_weight=getattr(self.config, "actor_q_weight", 1.0),
+                q_weight=(
+                    getattr(self.config, "actor_q_weight", 1.0)
+                    if q_weight is None
+                    else q_weight
+                ),
                 weight_mode=getattr(self.config, "actor_bc_weight_mode", "fixed"),
                 uncertainty_tau_low=tau_low,
                 uncertainty_tau_high=tau_high,

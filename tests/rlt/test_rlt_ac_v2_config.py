@@ -39,6 +39,7 @@ def test_new_ac_config_uses_safe_v2_semantics():
     assert config.human_bc_weight == pytest.approx(1.0)
     assert config.actor_human_weight == pytest.approx(1.0)
     assert config.actor_teacher_weight == pytest.approx(1.0)
+    assert config.actor_refine_objective == "teacher_q"
     assert config.actor_q_weight_max == pytest.approx(0.0)
     assert config.actor_q_trust_mode == "fixed"
     assert config.corrective_risk_checkpoint == ""
@@ -277,27 +278,28 @@ def test_actor_refine_config_validates_fixed_and_future_risk_modes(tmp_path):
     assert loaded.actor_q_weight_max == pytest.approx(0.25)
     assert loaded.actor_q_trust_mode == "fixed"
 
-    pure_q = ChunkACPolicyConfig(
+    td3bc = ChunkACPolicyConfig(
         training_stage="actor_refine",
-        actor_teacher_pretrained_path=teacher,
         actor_human_weight=0.0,
         actor_teacher_weight=0.0,
+        actor_refine_objective="td3bc",
         actor_q_weight_max=0.25,
         actor_q_trust_mode="fixed",
     )
-    assert pure_q.actor_human_weight == pytest.approx(0.0)
-    assert pure_q.actor_teacher_weight == pytest.approx(0.0)
-    assert pure_q.actor_q_weight_max == pytest.approx(0.25)
+    assert td3bc.actor_human_weight == pytest.approx(0.0)
+    assert td3bc.actor_teacher_weight == pytest.approx(0.0)
+    assert td3bc.actor_q_weight_max == pytest.approx(0.25)
+    assert td3bc.actor_teacher_pretrained_path == ""
 
-    pure_q0_control = ChunkACPolicyConfig(
+    td3bc_q0_control = ChunkACPolicyConfig(
         training_stage="actor_refine",
-        actor_teacher_pretrained_path=teacher,
         actor_human_weight=0.0,
         actor_teacher_weight=0.0,
+        actor_refine_objective="td3bc",
         actor_q_weight_max=0.0,
         actor_q_trust_mode="fixed",
     )
-    assert pure_q0_control.actor_q_weight_max == pytest.approx(0.0)
+    assert td3bc_q0_control.actor_q_weight_max == pytest.approx(0.0)
 
     with pytest.raises(ValueError, match="actor_teacher_pretrained_path"):
         ChunkACPolicyConfig(training_stage="actor_refine")
@@ -306,6 +308,15 @@ def test_actor_refine_config_validates_fixed_and_future_risk_modes(tmp_path):
             training_stage="actor_refine",
             actor_teacher_pretrained_path=teacher,
             actor_q_weight_max=-0.1,
+        )
+    with pytest.raises(ValueError, match="actor_refine_objective"):
+        ChunkACPolicyConfig(actor_refine_objective="unsupported")
+    with pytest.raises(ValueError, match="actor_human_weight=0"):
+        ChunkACPolicyConfig(
+            training_stage="actor_refine",
+            actor_refine_objective="td3bc",
+            actor_human_weight=1.0,
+            actor_teacher_weight=0.0,
         )
     with pytest.raises(ValueError, match="corrective_risk_checkpoint"):
         ChunkACPolicyConfig(

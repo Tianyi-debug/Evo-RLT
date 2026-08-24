@@ -332,31 +332,34 @@ def test_actor_refine_preserves_actor_q_gradient_and_freezes_other_heads(tmp_pat
     assert list(policy.get_optim_params()[0]["params"]) == list(policy.actor.parameters())
 
 
-def test_actor_refine_supports_pure_q_and_matched_zero_loss_control(tmp_path):
+def test_actor_refine_td3bc_uses_regular_bc_q_loss_and_no_teacher(tmp_path):
     policy = _head_only_policy()
     batch = _configure_actor_refine(policy, tmp_path, q_weight=0.25)
     policy.config.actor_human_weight = 0.0
     policy.config.actor_teacher_weight = 0.0
-    tx = policy._coerce_batch(batch)
+    policy.config.actor_refine_objective = "td3bc"
+    policy.config.beta = 1.0
+    policy.config.actor_q_weight = 0.0
 
-    pure_q_loss, pure_q_info = policy._forward_actor_refine(tx)
-    assert pure_q_info["loss_actor_human"] == pytest.approx(0.0)
-    assert pure_q_info["loss_actor_teacher"] == pytest.approx(0.0)
-    assert pure_q_loss.item() == pytest.approx(
-        pure_q_info["loss_actor_q_weighted"]
+    td3bc_loss, td3bc_info = policy.forward(batch)
+    assert td3bc_info["actor_refine_td3bc"] is True
+    assert td3bc_info["loss_actor_bc_weighted"] > 0
+    assert td3bc_info["loss_actor_q_weighted"] != pytest.approx(0.0)
+    assert td3bc_loss.item() == pytest.approx(
+        td3bc_info["loss_actor_bc_weighted"]
+        + td3bc_info["loss_actor_q_weighted"]
+        + td3bc_info["loss_actor_behavior_bc_weighted"]
     )
+    assert getattr(policy, "_teacher_actor", None) is None
+    assert all(parameter.grad is None for parameter in policy.critic.parameters())
 
     policy.config.actor_q_weight_max = 0.0
-    q0_loss, q0_info = policy._forward_actor_refine(tx)
-    assert q0_loss.item() == pytest.approx(0.0)
-    assert q0_info["loss_actor_human"] == pytest.approx(0.0)
-    assert q0_info["loss_actor_teacher"] == pytest.approx(0.0)
+    q0_loss, q0_info = policy.forward(batch)
     assert q0_info["loss_actor_q_weighted"] == pytest.approx(0.0)
+    assert q0_loss.item() == pytest.approx(q0_info["loss_actor_bc_weighted"])
     q0_loss.backward()
-    assert all(
-        parameter.grad is None or torch.count_nonzero(parameter.grad) == 0
-        for parameter in policy.actor.parameters()
-    )
+    assert any(parameter.grad is not None for parameter in policy.actor.parameters())
+    assert all(parameter.grad is None for parameter in policy.critic.parameters())
 
 
 def test_corrective_risk_trust_is_per_sample_and_detached(tmp_path):

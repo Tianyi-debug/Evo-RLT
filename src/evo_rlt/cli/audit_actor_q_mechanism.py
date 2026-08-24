@@ -188,25 +188,29 @@ def validate_matched_actor_refine(
                 "initial_model_sha256": _artifact_hash(
                     policy_config["pretrained_path"], "model.safetensors"
                 ),
-                "teacher_model_sha256": _artifact_hash(
-                    policy_config["actor_teacher_pretrained_path"], "model.safetensors"
-                ),
                 "train_cache_sha256": _artifact_hash(
                     dataset_root, "chunk_transitions_train.pt"
                 ),
             }
+            teacher_path = policy_config.get("actor_teacher_pretrained_path")
+            if teacher_path:
+                training_artifacts["teacher_model_sha256"] = _artifact_hash(
+                    teacher_path, "model.safetensors"
+                )
             policy_config_b = train_b["policy"]
             corresponding_b = {
                 "initial_model_sha256": _artifact_hash(
                     policy_config_b["pretrained_path"], "model.safetensors"
                 ),
-                "teacher_model_sha256": _artifact_hash(
-                    policy_config_b["actor_teacher_pretrained_path"], "model.safetensors"
-                ),
                 "train_cache_sha256": _artifact_hash(
                     train_b["dataset"]["repo_id"], "chunk_transitions_train.pt"
                 ),
             }
+            teacher_path_b = policy_config_b.get("actor_teacher_pretrained_path")
+            if teacher_path_b:
+                corresponding_b["teacher_model_sha256"] = _artifact_hash(
+                    teacher_path_b, "model.safetensors"
+                )
             if training_artifacts != corresponding_b:
                 mismatches.append("initialization, teacher, or training-cache content hashes differ")
         except (KeyError, FileNotFoundError) as error:

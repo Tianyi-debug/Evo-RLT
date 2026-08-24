@@ -120,6 +120,10 @@ class ChunkACPolicyConfig(PreTrainedConfig):
     actor_teacher_weight: float = 1.0
     actor_q_weight_max: float = 0.0
     actor_q_trust_mode: str = "fixed"
+    # ``teacher_q`` preserves the historical actor_refine objective.
+    # ``td3bc`` reuses the regular fixed-weight BC + min-Q actor loss while
+    # keeping the already-qualified critic frozen.
+    actor_refine_objective: str = "teacher_q"
     corrective_risk_checkpoint: str = ""
     # K advances over transition-cache anchors.  It is not a count of
     # non-overlapping executed action chunks.
@@ -307,6 +311,11 @@ class ChunkACPolicyConfig(PreTrainedConfig):
                 "actor_q_trust_mode must be 'fixed' or 'corrective_risk', "
                 f"got {self.actor_q_trust_mode!r}"
             )
+        if self.actor_refine_objective not in ("teacher_q", "td3bc"):
+            raise ValueError(
+                "actor_refine_objective must be 'teacher_q' or 'td3bc', "
+                f"got {self.actor_refine_objective!r}"
+            )
         if self.corrective_risk_horizon_chunks is not None:
             if (
                 self.corrective_risk_horizon_anchors != 3
@@ -344,16 +353,28 @@ class ChunkACPolicyConfig(PreTrainedConfig):
                     "actor_q_weight=0"
                 )
         if self.training_stage == "actor_refine":
-            if not self.actor_teacher_pretrained_path:
-                raise ValueError(
-                    "actor_refine requires actor_teacher_pretrained_path pointing "
-                    "to the frozen warmup AC pretrained_model directory"
-                )
-            # Both supervised weights may intentionally be zero for a pure-Q
-            # ablation.  In particular, Q=0 with both weights at zero is the
-            # strictly matched no-update control for that ablation.  The
-            # teacher checkpoint remains required for provenance and drift
-            # diagnostics, but contributes no gradient when its weight is zero.
+            if self.actor_refine_objective == "teacher_q":
+                if not self.actor_teacher_pretrained_path:
+                    raise ValueError(
+                        "teacher_q actor_refine requires "
+                        "actor_teacher_pretrained_path pointing to the frozen "
+                        "warmup AC pretrained_model directory"
+                    )
+                if self.actor_human_weight + self.actor_teacher_weight <= 0:
+                    raise ValueError(
+                        "teacher_q actor_refine requires a positive "
+                        "actor_human_weight or actor_teacher_weight"
+                    )
+            else:
+                if self.actor_human_weight != 0 or self.actor_teacher_weight != 0:
+                    raise ValueError(
+                        "td3bc actor_refine requires actor_human_weight=0 and "
+                        "actor_teacher_weight=0"
+                    )
+                if self.actor_q_trust_mode != "fixed":
+                    raise ValueError(
+                        "td3bc actor_refine requires actor_q_trust_mode='fixed'"
+                    )
             if self.actor_bc_weight_mode != "fixed":
                 raise ValueError(
                     "actor_refine requires actor_bc_weight_mode='fixed' so old "
