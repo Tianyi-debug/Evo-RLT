@@ -1,9 +1,11 @@
 """Offline critic qualification and cross-fitted reachable-improvement audit.
 
 The audit is update-relative: it evaluates a trained critic together with an
-actor, a concrete one-step direct-Q optimizer update, and the actor's residual
-reachable set.  RIR is an offline reliability proxy, not evidence that either
-critic is environmentally correct.
+actor, a concrete one-step optimizer update, and the actor's residual reachable
+set.  The update can be the historical Q-only operator or a matched TD3+BC
+comparison that isolates the marginal effect of adding Q to BC.  RIR is an
+offline reliability proxy, not evidence that either critic is environmentally
+correct.
 """
 
 from __future__ import annotations
@@ -26,7 +28,11 @@ from torch import Tensor, nn
 from evo_rlt.cli.audit_actor_q_mechanism import _construct_heads, _load_heads
 from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
-from evo_rlt.core.losses import discounted_chunk_return, resolve_td_bootstrap_mask
+from evo_rlt.core.losses import (
+    actor_loss_with_diagnostics,
+    discounted_chunk_return,
+    resolve_td_bootstrap_mask,
+)
 
 
 SCHEMA_VERSION = 1
@@ -261,10 +267,20 @@ def _episode_metadata(rows: list[dict[str, Any]]) -> tuple[list[str], list[str],
 
 def _collate(rows: list[dict[str, Any]], indices: Tensor, device: torch.device) -> dict[str, Tensor]:
     selected = [rows[int(index)] for index in indices.tolist()]
+    proposals = _stack(selected, "proposal_chunk", flatten_chunk=True).to(device)
+    bc_targets = torch.stack(
+        [
+            _tensor(row, "bc_target_chunk")
+            if "bc_target_chunk" in row
+            else _tensor(row, "proposal_chunk")
+            for row in selected
+        ]
+    ).flatten(start_dim=-2).to(device)
     result = {
         "state_vec": _stack(selected, "state_vec").to(device),
         "exec_chunk_flat": _stack(selected, "exec_chunk", flatten_chunk=True).to(device),
-        "proposal_chunk_flat": _stack(selected, "proposal_chunk", flatten_chunk=True).to(device),
+        "proposal_chunk_flat": proposals,
+        "bc_target_chunk_flat": bc_targets,
         "next_state_vec": _stack(selected, "next_state_vec").to(device),
         "next_proposal_flat": _stack(
             selected, "next_proposal_chunk", flatten_chunk=True
@@ -284,6 +300,9 @@ def _collate(rows: list[dict[str, Any]], indices: Tensor, device: torch.device) 
         ),
         "actor_q_mask": torch.tensor(
             [_scalar(row, "actor_q_mask", 1.0) for row in selected], device=device
+        ),
+        "actor_bc_mask": torch.tensor(
+            [_scalar(row, "actor_bc_mask", 1.0) for row in selected], device=device
         ),
     }
     return result
@@ -622,6 +641,83 @@ def _virtual_q_update(
     }
 
 
+def _virtual_td3bc_update(
+    *,
+    actor: ChunkActor,
+    critic: TwinCritic,
+    score_mode: str,
+    batch: dict[str, Tensor],
+    lambda_q: float,
+    beta: float,
+    actor_lr: float,
+    update_seed: int,
+) -> tuple[ChunkActor, dict[str, Any]]:
+    """Run one fixed-weight TD3+BC-style actor step from a clean theta0.
+
+    This mirrors the current actor-only loss: summed action-dimension BC,
+    semantic actor masks, fixed beta, no teacher, and no behavior-preservation
+    term. ``lambda_q=0`` is the matched BC-only control.
+    """
+    if lambda_q < 0 or beta < 0:
+        raise ValueError("lambda_q and beta must be non-negative")
+    updated = copy.deepcopy(actor).train()
+    critic_digest_before = _state_digest(critic)
+    critic_requires_grad = [parameter.requires_grad for parameter in critic.parameters()]
+    for parameter in critic.parameters():
+        parameter.requires_grad_(False)
+    optimizer = torch.optim.AdamW(updated.parameters(), lr=actor_lr, weight_decay=0.0)
+    optimizer.zero_grad(set_to_none=True)
+    q_valid = batch["actor_q_mask"].reshape(-1) > 0.5
+    bc_valid = batch["actor_bc_mask"].reshape(-1) > 0.5
+
+    def selected_critic(states: Tensor, actions: Tensor) -> tuple[Tensor, Tensor]:
+        q1, q2 = critic(states, actions)
+        if score_mode == "min":
+            return q1, q2
+        selected = q1 if score_mode == "q1" else q2
+        return selected, selected
+
+    devices = [batch["state_vec"].device] if batch["state_vec"].is_cuda else []
+    with torch.random.fork_rng(devices=devices):
+        torch.manual_seed(update_seed)
+        loss, diagnostics = actor_loss_with_diagnostics(
+            actor=updated,
+            critic=selected_critic,
+            batch=batch,
+            beta=beta,
+            weight_mode="fixed",
+            behavior_preservation_weight=0.0,
+            q_weight=lambda_q,
+        )
+    loss.backward()
+    pre_clip_norm = torch.nn.utils.clip_grad_norm_(updated.parameters(), 1.0)
+    optimizer.step()
+    for parameter, requires_grad in zip(critic.parameters(), critic_requires_grad, strict=True):
+        parameter.requires_grad_(requires_grad)
+    if _state_digest(critic) != critic_digest_before:
+        raise AssertionError("virtual TD3+BC actor update modified critic parameters")
+    updated.eval()
+    return updated, {
+        "optimizer": "AdamW",
+        "weight_decay": 0.0,
+        "gradient_clip_norm": 1.0,
+        "actor_lr": actor_lr,
+        "update_seed": update_seed,
+        "lambda_q": lambda_q,
+        "beta": beta,
+        "loss": float(loss.detach().item()),
+        "q_loss_raw": float(diagnostics["loss_actor_q_raw"].item()),
+        "bc_loss_raw": float(diagnostics["loss_actor_bc_raw"].item()),
+        "pre_clip_gradient_norm": float(pre_clip_norm.detach().item()),
+        "optimizer_steps": 1,
+        "q_channel_only": False,
+        "teacher_weight": 0.0,
+        "behavior_preservation_weight": 0.0,
+        "actor_q_valid_rows": int(q_valid.sum().item()),
+        "actor_bc_valid_rows": int(bc_valid.sum().item()),
+    }
+
+
 def _gain_summary(values: Tensor) -> dict[str, Any]:
     result = _quantiles(values)
     result.update(
@@ -675,9 +771,15 @@ def run_rir(
     bootstrap_replicates: int,
     seed: int,
     twin_head_approximation: bool,
+    update_objective: str = "q_only",
+    beta: float = 1.0,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     if lambda_q <= 0 or batch_size <= 0:
         raise ValueError("lambda_q and batch_size must be positive")
+    if update_objective not in {"q_only", "td3bc_marginal"}:
+        raise ValueError("update_objective must be 'q_only' or 'td3bc_marginal'")
+    if beta < 0:
+        raise ValueError("beta must be non-negative")
     if twin_head_approximation and critic_a_checkpoint != critic_b_checkpoint:
         raise ValueError("twin-head approximation requires the same critic checkpoint")
     rows = _load_rows(validation_cache)
@@ -713,30 +815,69 @@ def run_rir(
     actor_digest_before = _state_digest(actor)
     critic_a_digest_before, critic_b_digest_before = _state_digest(critic_a), _state_digest(critic_b)
     mode_a, mode_b = ("q1", "q2") if twin_head_approximation else ("min", "min")
-    actor_1, update_1 = _virtual_q_update(
-        actor=actor,
-        critic=critic_a,
-        score_mode=mode_a,
-        states=update_batch["state_vec"],
-        proposals=update_batch["proposal_chunk_flat"],
-        lambda_q=lambda_q,
-        actor_lr=actor_lr,
-    )
-    actor_2, update_2 = _virtual_q_update(
-        actor=actor,
-        critic=critic_b,
-        score_mode=mode_b,
-        states=update_batch["state_vec"],
-        proposals=update_batch["proposal_chunk_flat"],
-        lambda_q=lambda_q,
-        actor_lr=actor_lr,
-    )
+    control_actor: ChunkActor | None = None
+    control_update: dict[str, Any] | None = None
+    if update_objective == "q_only":
+        actor_1, update_1 = _virtual_q_update(
+            actor=actor,
+            critic=critic_a,
+            score_mode=mode_a,
+            states=update_batch["state_vec"],
+            proposals=update_batch["proposal_chunk_flat"],
+            lambda_q=lambda_q,
+            actor_lr=actor_lr,
+        )
+        actor_2, update_2 = _virtual_q_update(
+            actor=actor,
+            critic=critic_b,
+            score_mode=mode_b,
+            states=update_batch["state_vec"],
+            proposals=update_batch["proposal_chunk_flat"],
+            lambda_q=lambda_q,
+            actor_lr=actor_lr,
+        )
+    else:
+        control_actor, control_update = _virtual_td3bc_update(
+            actor=actor,
+            critic=critic_a,
+            score_mode=mode_a,
+            batch=update_batch,
+            lambda_q=0.0,
+            beta=beta,
+            actor_lr=actor_lr,
+            update_seed=seed,
+        )
+        actor_1, update_1 = _virtual_td3bc_update(
+            actor=actor,
+            critic=critic_a,
+            score_mode=mode_a,
+            batch=update_batch,
+            lambda_q=lambda_q,
+            beta=beta,
+            actor_lr=actor_lr,
+            update_seed=seed,
+        )
+        actor_2, update_2 = _virtual_td3bc_update(
+            actor=actor,
+            critic=critic_b,
+            score_mode=mode_b,
+            batch=update_batch,
+            lambda_q=lambda_q,
+            beta=beta,
+            actor_lr=actor_lr,
+            update_seed=seed,
+        )
     if _state_digest(actor) != actor_digest_before:
         raise AssertionError("original actor changed during virtual updates")
     if _state_digest(critic_a) != critic_a_digest_before or _state_digest(critic_b) != critic_b_digest_before:
         raise AssertionError("critic changed during RIR")
     with torch.no_grad():
-        base_action = _actor_actions(actor, states, proposals)
+        theta0_action = _actor_actions(actor, states, proposals)
+        base_action = (
+            _actor_actions(control_actor, states, proposals)
+            if control_actor is not None
+            else theta0_action
+        )
         action_1 = _actor_actions(actor_1, states, proposals)
         action_2 = _actor_actions(actor_2, states, proposals)
         q1_base = _score_critic(critic_a, states, base_action, mode=mode_a)
@@ -826,14 +967,25 @@ def run_rir(
             "actor_q_valid_rows": len(valid_indices),
         },
         "update_operator": {
-            "definition": "one real actor-parameter AdamW update using only -lambda_Q * mean(Q), actor_q_mask-valid states, and the checkpoint actor parameterization",
+            "objective": update_objective,
+            "definition": (
+                "one actor-parameter AdamW update using only -lambda_Q * mean(Q), "
+                "with theta0 as the gain baseline"
+                if update_objective == "q_only"
+                else "matched one-step marginal comparison: BC+Q treatment minus "
+                "BC-only control, from the same theta0, batch, optimizer type, "
+                "fresh optimizer state, masks, beta, and actor parameterization"
+            ),
+            "control": control_update,
             "direction_1": update_1,
             "direction_2": update_2,
             "same_theta0": True,
             "same_update_batch": True,
             "update_batch_indices": update_indices.tolist(),
             "audit_batch_fingerprint": update_fingerprint,
-            "q_normalization": "masked arithmetic mean; no additional Q normalization exists in actor_refine",
+            "gain_baseline": "BC-only one-step actor" if control_actor is not None else "theta0 actor",
+            "beta": beta if update_objective == "td3bc_marginal" else None,
+            "q_normalization": "masked arithmetic mean; fixed lambda_Q; no dynamic Q-magnitude normalization",
         },
         "overall": overall,
         "gain_diagnostics": {
@@ -935,6 +1087,8 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
         bootstrap_replicates=args.bootstrap_reps,
         seed=args.seed,
         twin_head_approximation=args.twin_head_approximation,
+        update_objective=args.update_objective,
+        beta=args.beta,
     )
     resolved = {
         "git_commit": _git_commit(),
@@ -949,6 +1103,8 @@ def run_audit(args: argparse.Namespace) -> dict[str, Any]:
         "bootstrap_reps": args.bootstrap_reps,
         "device": args.device,
         "twin_head_approximation": args.twin_head_approximation,
+        "update_objective": args.update_objective,
+        "beta": args.beta,
     }
     (output_dir / "qualification_report.json").write_text(json.dumps(qualification, indent=2) + "\n")
     (output_dir / "rir_report.json").write_text(json.dumps(rir, indent=2) + "\n")
@@ -969,6 +1125,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--critic-b-checkpoint", type=Path)
     parser.add_argument("--validation-cache", type=Path, required=True)
     parser.add_argument("--lambda-q", type=float, default=0.25)
+    parser.add_argument(
+        "--update-objective",
+        choices=("q_only", "td3bc_marginal"),
+        default="q_only",
+        help=(
+            "q_only preserves the historical audit; td3bc_marginal compares "
+            "a BC+Q step against a matched BC-only step"
+        ),
+    )
+    parser.add_argument(
+        "--beta",
+        type=float,
+        default=1.0,
+        help="Fixed BC coefficient used by td3bc_marginal.",
+    )
     parser.add_argument("--actor-lr", type=float)
     parser.add_argument("--seed", type=int, default=1000)
     parser.add_argument("--batch-size", type=int, default=256)

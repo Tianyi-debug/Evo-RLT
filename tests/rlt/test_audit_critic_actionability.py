@@ -12,6 +12,7 @@ from evo_rlt.cli.audit_critic_actionability import (
     _collate,
     _rir_combined,
     _state_digest,
+    _virtual_td3bc_update,
     _virtual_q_update,
 )
 from evo_rlt.cli.audit_actor_q_mechanism import _canonical_policy_config
@@ -182,12 +183,65 @@ def test_collate_preserves_current_critic_and_actor_q_masks():
         "bootstrap_mask": torch.tensor(1.0),
     }
     rows = [
-        {**copy.deepcopy(template), "critic_mask": torch.tensor(1.0), "actor_q_mask": torch.tensor(0.0)},
-        {**copy.deepcopy(template), "critic_mask": torch.tensor(0.0), "actor_q_mask": torch.tensor(1.0)},
+        {
+            **copy.deepcopy(template),
+            "critic_mask": torch.tensor(1.0),
+            "actor_q_mask": torch.tensor(0.0),
+            "actor_bc_mask": torch.tensor(1.0),
+        },
+        {
+            **copy.deepcopy(template),
+            "critic_mask": torch.tensor(0.0),
+            "actor_q_mask": torch.tensor(1.0),
+            "actor_bc_mask": torch.tensor(0.0),
+        },
     ]
     batch = _collate(rows, torch.tensor([1, 0]), torch.device("cpu"))
     assert batch["critic_mask"].tolist() == [0.0, 1.0]
     assert batch["actor_q_mask"].tolist() == [1.0, 0.0]
+    assert batch["actor_bc_mask"].tolist() == [0.0, 1.0]
+    assert torch.equal(batch["bc_target_chunk_flat"], batch["proposal_chunk_flat"])
+
+
+def test_td3bc_marginal_uses_bc_only_control_and_preserves_inputs():
+    actor = _actor()
+    critic = _LinearTwinCritic(1.0)
+    states, proposals = _inputs()
+    batch = {
+        "state_vec": states,
+        "proposal_chunk_flat": proposals,
+        "bc_target_chunk_flat": proposals + 0.05,
+        "actor_q_mask": torch.ones(len(states)),
+        "actor_bc_mask": torch.ones(len(states)),
+    }
+    actor_before, critic_before = _state_digest(actor), _state_digest(critic)
+    control, control_meta = _virtual_td3bc_update(
+        actor=actor,
+        critic=critic,
+        score_mode="min",
+        batch=batch,
+        lambda_q=0.0,
+        beta=1.0,
+        actor_lr=5e-3,
+        update_seed=9,
+    )
+    treatment, treatment_meta = _virtual_td3bc_update(
+        actor=actor,
+        critic=critic,
+        score_mode="min",
+        batch=batch,
+        lambda_q=0.25,
+        beta=1.0,
+        actor_lr=5e-3,
+        update_seed=9,
+    )
+    assert _state_digest(actor) == actor_before
+    assert _state_digest(critic) == critic_before
+    assert _state_digest(control) != _state_digest(treatment)
+    assert control_meta["lambda_q"] == 0.0
+    assert treatment_meta["lambda_q"] == 0.25
+    assert control_meta["bc_loss_raw"] == pytest.approx(treatment_meta["bc_loss_raw"])
+    assert control_meta["teacher_weight"] == 0.0
 
 
 @pytest.mark.parametrize("seed", [1, 8])
