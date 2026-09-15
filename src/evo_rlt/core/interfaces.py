@@ -36,6 +36,9 @@ CRITIC_MASK = "critic_mask"
 ACTOR_Q_MASK = "actor_q_mask"
 ACTOR_BC_MASK = "actor_bc_mask"
 CACHE_SEMANTICS_VERSION = "cache_semantics_version"
+EPISODE_UID = "episode_uid"
+TRANSITION_UID = "transition_uid"
+REWARD_SEMANTICS_VERSION = "reward_semantics_version"
 
 
 # Transition-cache credit semantics. Version 1 used ``1 - done`` as the only
@@ -44,6 +47,9 @@ CACHE_SEMANTICS_VERSION = "cache_semantics_version"
 # ``bootstrap_mask`` for Bellman-boundary semantics.
 LEGACY_TRANSITION_CACHE_SEMANTICS_VERSION = 1
 TRANSITION_CACHE_SEMANTICS_VERSION = 2
+# Explicit identity for the sparse success-only reward used by the paper
+# pipeline. This is intentionally separate from cache credit semantics.
+SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS = "sparse_terminal_success_v1"
 
 
 def validate_transition_cache_semantics(
@@ -130,6 +136,10 @@ class ChunkTransition:
     actual_steps: torch.Tensor  # scalar int, steps actually executed (<= C)
     source: torch.Tensor = field(default_factory=lambda: torch.tensor(0))
     episode_id: torch.Tensor = field(default_factory=lambda: torch.tensor(-1))
+    # Stable source-dataset identity, unlike a local episode_id that may restart
+    # from zero in every independently recorded dataset.
+    episode_uid: str | None = None
+    transition_uid: str | None = None
     is_critical: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
     proposal_chunk: torch.Tensor | None = None
     bc_target_chunk: torch.Tensor | None = None
@@ -147,6 +157,9 @@ class ChunkTransition:
     cache_semantics_version: torch.Tensor = field(
         default_factory=lambda: torch.tensor(LEGACY_TRANSITION_CACHE_SEMANTICS_VERSION)
     )
+    # ``None`` is deliberately unknown rather than silently labeling legacy or
+    # third-party transitions as the paper's sparse terminal-success reward.
+    reward_semantics_version: str | None = None
     # New recorder datasets contain complementary_info.requested_action and
     # reserve dataset ``action`` for send_action()'s return value. Old datasets
     # lack that provenance and therefore remain explicitly marked legacy.

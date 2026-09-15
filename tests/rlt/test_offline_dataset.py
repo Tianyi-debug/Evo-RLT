@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -7,6 +9,7 @@ from torch.utils.data import DataLoader, Dataset
 from evo_rlt.adapters.lerobot.demo_loader import rlt_demo_collate
 from evo_rlt.adapters.lerobot.policies.dataset_rlt_ac import ChunkTransitionDataset
 from evo_rlt.core.interfaces import (
+    SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS,
     TRANSITION_CACHE_SEMANTICS_VERSION,
     ChunkTransition,
 )
@@ -266,6 +269,7 @@ def test_build_transitions_basic():
         episode_last_frame=4,
         chunk_length=C,
         stride=1,
+        episode_uid="lerobot:fixture:episode:7",
     )
     assert len(transitions) == 2
 
@@ -287,6 +291,28 @@ def test_build_transitions_basic():
         assert t.state_vec.shape == (state_dim,)
         assert t.exec_chunk.shape == (C, action_dim)
         assert t.actual_steps.item() == C
+        assert t.episode_uid == "lerobot:fixture:episode:7"
+        assert t.reward_semantics_version == SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS
+    assert transitions[0].transition_uid == (
+        "lerobot:fixture:episode:7:anchor:0:chunk:3:stride:1"
+    )
+
+
+def test_save_transition_cache_exports_inspectable_provenance_sidecar(tmp_path):
+    transition = _make_transitions(1)[0]
+    transition.episode_uid = "lerobot:fixture:episode:0"
+    transition.transition_uid = "lerobot:fixture:episode:0:anchor:0:chunk:3:stride:1"
+    transition.reward_semantics_version = SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS
+    transition.exec_action_is_actual_sent = torch.tensor(1.0)
+    save_transition_cache([transition], tmp_path, split="train")
+
+    sidecar = json.loads(
+        (tmp_path / "chunk_transitions_train.provenance.json").read_text()
+    )
+    assert sidecar["rows"] == 1
+    assert sidecar["episode_uids"] == ["lerobot:fixture:episode:0"]
+    assert sidecar["transition_uids_complete_and_unique"] is True
+    assert sidecar["critic_valid_actual_sent_fraction"] == 1.0
 
 
 def test_build_transitions_stride_uses_c_step_bootstrap():

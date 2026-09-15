@@ -149,8 +149,11 @@ def critic_loss_with_diagnostics(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """TD3-style chunk-level TD loss with correct truncated-chunk handling.
 
-    Uses actual_steps to compute the correct bootstrap exponent gamma^k
-    instead of always using gamma^C.
+    Uses zero-padded rewards and ``actual_steps`` for gamma^k, gates bootstrap
+    with the explicit semantic-v2 ``bootstrap_mask``, and evaluates the
+    deterministic current actor mean with target-critic min-Q. The entire
+    target (including configured target-Q clipping) is under ``no_grad``;
+    there is intentionally no separate target actor.
     """
     x = batch["state_vec"]
     a = batch["exec_chunk_flat"]
@@ -301,7 +304,6 @@ def actor_loss_with_diagnostics(
     proposal = batch.get("proposal_chunk_flat", batch.get("ref_chunk_flat"))
     if proposal is None:
         raise KeyError("actor loss requires proposal_chunk_flat (or legacy ref_chunk_flat)")
-    bc_target_raw = batch.get("bc_target_chunk_flat", proposal)
     mu, _ = actor.forward(x, proposal, training=True)
     if callable(critic):
         q1, q2 = critic(x, mu)
@@ -339,24 +341,18 @@ def actor_loss_with_diagnostics(
 
     rho = rho.detach()
     beta_per_sample = beta_per_sample.detach()
-    bc_target = (
-        bc_target_raw.clamp(-1.0, 1.0)
-        if getattr(actor, "action_residual", False)
-        else bc_target_raw
+    terms = fixed_td3bc_objective_terms(
+        mu=mu,
+        q=q,
+        batch=batch,
+        action_residual=bool(getattr(actor, "action_residual", False)),
     )
-    bc_per_sample = ((mu - bc_target) ** 2).sum(dim=-1)
-    actor_bc_mask = batch.get("actor_bc_mask")
-    if actor_bc_mask is None:
-        actor_bc_valid = torch.ones_like(bc_per_sample, dtype=torch.bool)
-    else:
-        actor_bc_valid = actor_bc_mask.reshape(-1).to(bc_per_sample.device) > 0.5
-    actor_q_mask = batch.get("actor_q_mask")
-    if actor_q_mask is None:
-        actor_q_valid = torch.ones_like(q, dtype=torch.bool)
-    else:
-        actor_q_valid = actor_q_mask.reshape(-1).to(q.device) > 0.5
-    q_loss = -_masked_mean(q, actor_q_valid)
-    bc_raw = _masked_mean(bc_per_sample, actor_bc_valid)
+    bc_target = terms["bc_target"]
+    actor_bc_valid = terms["actor_bc_valid"]
+    actor_q_valid = terms["actor_q_valid"]
+    bc_per_sample = terms["bc_per_sample"]
+    q_loss = terms["q_loss"]
+    bc_raw = terms["bc_loss"]
     bc_weighted = _masked_mean(beta_per_sample * bc_per_sample, actor_bc_valid)
 
     source = batch.get("source")
@@ -487,3 +483,46 @@ def actor_loss_with_diagnostics(
         diagnostics["human_bc_target_rmse"] = zero
 
     return loss, diagnostics
+
+
+def fixed_td3bc_objective_terms(
+    *,
+    mu: torch.Tensor,
+    q: torch.Tensor,
+    batch: dict[str, torch.Tensor],
+    action_residual: bool,
+) -> dict[str, torch.Tensor]:
+    """Return the raw fixed-weight TD3+BC terms used by training and audits.
+
+    In residual-actor mode the effective target is exactly
+    ``clip(a_BC_raw, -1, 1)``. It is deliberately *not* projected into the
+    proposal-conditioned residual reachable interval. Q and BC use their own
+    typed masks, and BC sums over all H*d action coordinates per sample before
+    taking the masked batch mean.
+    """
+    proposal = batch.get("proposal_chunk_flat", batch.get("ref_chunk_flat"))
+    if proposal is None:
+        raise KeyError("actor loss requires proposal_chunk_flat (or legacy ref_chunk_flat)")
+    bc_target_raw = batch.get("bc_target_chunk_flat", proposal)
+    bc_target = bc_target_raw.clamp(-1.0, 1.0) if action_residual else bc_target_raw
+    bc_per_sample = (mu - bc_target).square().sum(dim=-1)
+    actor_bc_mask = batch.get("actor_bc_mask")
+    actor_bc_valid = (
+        torch.ones_like(bc_per_sample, dtype=torch.bool)
+        if actor_bc_mask is None
+        else actor_bc_mask.reshape(-1).to(bc_per_sample.device) > 0.5
+    )
+    actor_q_mask = batch.get("actor_q_mask")
+    actor_q_valid = (
+        torch.ones_like(q, dtype=torch.bool)
+        if actor_q_mask is None
+        else actor_q_mask.reshape(-1).to(q.device) > 0.5
+    )
+    return {
+        "q_loss": -_masked_mean(q, actor_q_valid),
+        "bc_loss": _masked_mean(bc_per_sample, actor_bc_valid),
+        "bc_per_sample": bc_per_sample,
+        "bc_target": bc_target,
+        "actor_q_valid": actor_q_valid,
+        "actor_bc_valid": actor_bc_valid,
+    }

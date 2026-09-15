@@ -153,31 +153,26 @@ def _load_models(match: dict, evidence: Evidence):
     return control, candidates, critics
 
 
-def _audit_inputs(path: Path, config: dict):
+def _audit_inputs(path: Path, config: dict, evidence: Evidence):
     # Exactly one explicitly supplied audit file; no directory concatenation.
-    rows = torch.load(path, map_location="cpu", weights_only=False)
-    require(isinstance(rows, list) and bool(rows), "Audit cache must be a nonempty list of transitions")
+    _, rows = evidence.cache(path)
     selected, episodes = [], []
     for index, row in enumerate(rows):
-        require(isinstance(row, dict) and all(k in row for k in ("actor_q_mask", "episode_id", "state_vec", "proposal_chunk")),
+        require(isinstance(row, dict) and all(k in row for k in ("actor_q_mask", "episode_uid", "state_vec", "proposal_chunk")),
                 f"Missing audit schema at row {index}")
         mask = torch.as_tensor(row["actor_q_mask"])
         require(mask.numel() == 1 and mask.item() in (0, 1), f"Invalid actor_q_mask at row {index}")
-        episode = torch.as_tensor(row["episode_id"])
-        require(episode.numel() == 1 and math_is_nonnegative_integer(episode.item()), f"Invalid episode_id at row {index}")
+        episode_uid = row["episode_uid"]
+        require(isinstance(episode_uid, str) and bool(episode_uid.strip()), f"Invalid episode_uid at row {index}")
         if mask.item() == 1:
             selected.append(index)
-            episodes.append(f"audit:{int(episode.item())}")
+            episodes.append(episode_uid)
     require(bool(selected), "Audit cache contains no Q-valid states")
     states = torch.stack([torch.as_tensor(rows[i]["state_vec"], dtype=torch.float32) for i in selected])
     proposals = torch.stack([torch.as_tensor(rows[i]["proposal_chunk"], dtype=torch.float32) for i in selected])
     require(states.shape == (len(selected), config["rl_token_dim"] + config["proprio_dim"]), "Audit state shape differs from checkpoint")
     require(proposals.shape == (len(selected), config["chunk_length"], config["action_dim"]), "Audit proposal shape differs from checkpoint")
     return states, proposals.flatten(1), selected, episodes, len(rows)
-
-
-def math_is_nonnegative_integer(value) -> bool:
-    return isinstance(value, (int, float)) and np.isfinite(value) and value >= 0 and int(value) == value
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -199,6 +194,7 @@ def run(args: argparse.Namespace) -> dict:
                Path(__file__).with_name("audit_actor_q_mechanism.py"),
                Path(__file__).resolve().parents[1] / "core" / "actor.py",
                Path(__file__).resolve().parents[1] / "core" / "critic.py",
+               Path(__file__).resolve().parents[1] / "core" / "losses.py",
                Path(__file__).resolve().parents[1] / "core" / "utils.py"]
     report = {
         "schema_version": 1, "mode": "preflight_only" if args.preflight_only else "fixed_full_refinement_bidirectional",
@@ -208,7 +204,18 @@ def run(args: argparse.Namespace) -> dict:
             "actor_optimizer_steps_in_this_audit": 0, "audit_cache_is_evaluation_only": True,
             "critic_score": "min of both heads of the complete critic",
             "positive_support": "strict cross_gain > 0; near-zero fraction reported separately at abs(gain)<=1e-8",
-            "shift": "100 * mean_states(RMS_action_dimensions((candidate-Q0)/residual_bound)); then mean_directions",
+            "shift": (
+                "candidate minus common Q0; elementwise divide by residual bound; "
+                "RMS over H*d per state; mean valid audit states; mean two directions; multiply by 100"
+            ),
+            "normalized_shift_aggregation_order": [
+                "candidate_minus_common_BC_only_actor",
+                "elementwise_divide_by_action_dimension_residual_bound",
+                "RMS_over_H_times_d_per_audit_state",
+                "mean_over_actor_q_mask_equal_one_audit_states",
+                "mean_over_two_inducing_critic_directions",
+                "multiply_by_100_for_percent",
+            ],
             "rir": "mean_directions(mean_states(cross_gain > 0))",
             "bootstrap": "joint episode resampling with transition-weighted means; no refitting",
             "robot_success": "not computed/imported; deployed C1 actor is distinct from a two-direction aggregate",
@@ -224,7 +231,7 @@ def run(args: argparse.Namespace) -> dict:
     if not args.preflight_only:
         control, actors, critics = _load_models(match, evidence)
         states, proposals, indices, episodes, total = _audit_inputs(
-            Path(match["audit_cache"]), match["effective_config"]["policy"])
+            Path(match["audit_cache"]["path"]), match["effective_config"]["policy"], evidence)
         values, saved_actions = evaluate_fixed_actors(
             control=control, candidates=actors, critics=critics, states=states, proposals=proposals,
             batch_size=args.batch_size, device=args.device)

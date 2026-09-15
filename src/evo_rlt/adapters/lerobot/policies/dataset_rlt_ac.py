@@ -139,6 +139,11 @@ class ChunkTransitionDataset(Dataset):
     def __len__(self) -> int:
         return self.num_frames
 
+    @property
+    def sample_indices(self) -> tuple[int, ...]:
+        """Raw cache indices in the deterministic source-balanced sample map."""
+        return tuple(self._sample_indices)
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         cache_index = self._sample_indices[idx]
         sample = dict(self._transitions[cache_index])

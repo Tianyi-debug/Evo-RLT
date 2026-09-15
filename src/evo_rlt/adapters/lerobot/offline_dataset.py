@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from pathlib import Path
 
@@ -9,6 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from evo_rlt.adapters.lerobot.demo_loader import RLTDemoDataset, rlt_demo_collate
 from evo_rlt.core.interfaces import (
     LEGACY_TRANSITION_CACHE_SEMANTICS_VERSION,
+    SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS,
     TRANSITION_CACHE_SEMANTICS_VERSION,
     ChunkTransition,
     Observation,
@@ -125,6 +128,7 @@ def _encoded_to_transitions(
     episode_id: int = -1,
     is_critical: float = 0.0,
     fps: float = 30.0,
+    episode_uid: str | None = None,
 ) -> list[ChunkTransition]:
     """Convert list of sampled anchors into chunk-level ChunkTransitions.
 
@@ -164,6 +168,11 @@ def _encoded_to_transitions(
             is_terminal_chunk=is_terminal,
             episode_success=episode_success,
         )
+        transition_uid = (
+            f"{episode_uid}:anchor:{start_frame}:chunk:{chunk_length}:stride:{stride}"
+            if episode_uid is not None
+            else None
+        )
         transitions.append(ChunkTransition(
             state_vec=s, exec_chunk=e, ref_chunk=r, reward_seq=rew,
             next_state_vec=ns, next_ref_chunk=nr,
@@ -173,11 +182,14 @@ def _encoded_to_transitions(
             actual_steps=torch.tensor(chunk_length),
             source=torch.tensor(source),
             episode_id=torch.tensor(episode_id),
+            episode_uid=episode_uid,
+            transition_uid=transition_uid,
             is_critical=torch.tensor(is_critical),
             proposal_chunk=r,
             bc_target_chunk=r,
             next_proposal_chunk=nr,
             cache_semantics_version=torch.tensor(TRANSITION_CACHE_SEMANTICS_VERSION),
+            reward_semantics_version=SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS,
             anchor_start_frame=torch.tensor(start_frame, dtype=torch.long),
             frame_stride=torch.tensor(stride, dtype=torch.long),
             fps=torch.tensor(float(fps), dtype=torch.float32),
@@ -336,12 +348,15 @@ def save_transition_cache(
             "actual_steps": t.actual_steps,
             "source": t.source,
             "episode_id": t.episode_id,
+            "episode_uid": t.episode_uid,
+            "transition_uid": t.transition_uid,
             "is_critical": t.is_critical,
             "critic_mask": t.critic_mask,
             "actor_q_mask": t.actor_q_mask,
             "actor_bc_mask": t.actor_bc_mask,
             "intervention_reason": t.intervention_reason,
             "cache_semantics_version": t.cache_semantics_version,
+            "reward_semantics_version": t.reward_semantics_version,
             "exec_action_is_actual_sent": t.exec_action_is_actual_sent,
             "anchor_start_frame": t.anchor_start_frame,
             "frame_stride": t.frame_stride,
@@ -353,6 +368,47 @@ def save_transition_cache(
     tmp = path.with_name(f".{path.name}.tmp")
     torch.save(data, tmp)
     tmp.replace(path)
+    # Sidecar metadata makes the provenance fields inspectable without relying
+    # on an output-directory name. Legacy callers remain writable, but the
+    # paper validator will reject caches whose row-level stable IDs are absent.
+    episode_uids = sorted({str(row["episode_uid"]) for row in data if row["episode_uid"]})
+    transition_uids = [str(row["transition_uid"]) for row in data if row["transition_uid"]]
+    actual_sent_valid = [
+        float(torch.as_tensor(row["exec_action_is_actual_sent"]).item())
+        for row in data
+        if float(torch.as_tensor(row["critic_mask"]).item()) > 0.5
+    ]
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(block)
+    sidecar = {
+        "schema_version": 1,
+        "cache_file": path.name,
+        "cache_sha256": digest.hexdigest(),
+        "rows": len(data),
+        "cache_semantics_versions": sorted(
+            {int(torch.as_tensor(row["cache_semantics_version"]).item()) for row in data}
+        ),
+        "reward_semantics_versions": sorted(
+            {str(row["reward_semantics_version"]) for row in data}
+        ),
+        "stable_episode_identity_available": len(episode_uids) > 0,
+        "episode_uids": episode_uids,
+        "transition_uids_complete_and_unique": (
+            len(transition_uids) == len(data) and len(set(transition_uids)) == len(data)
+        ),
+        "critic_valid_rows": len(actual_sent_valid),
+        "critic_valid_actual_sent_fraction": (
+            sum(value == 1.0 for value in actual_sent_valid) / len(actual_sent_valid)
+            if actual_sent_valid
+            else None
+        ),
+    }
+    sidecar_path = path.with_suffix(".provenance.json")
+    sidecar_tmp = sidecar_path.with_name(f".{sidecar_path.name}.tmp")
+    sidecar_tmp.write_text(json.dumps(sidecar, indent=2) + "\n")
+    sidecar_tmp.replace(sidecar_path)
     logger.info("Saved %d transitions to %s", len(data), path)
 
 

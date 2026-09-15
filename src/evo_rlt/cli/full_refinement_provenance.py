@@ -20,6 +20,11 @@ import torch
 from safetensors.torch import load_file
 
 from evo_rlt.cli.audit_actor_q_mechanism import _construct_heads
+from evo_rlt.core.interfaces import (
+    SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS,
+    TRANSITION_CACHE_SEMANTICS_VERSION,
+    validate_transition_cache_semantics,
+)
 
 
 class ProvenanceError(ValueError):
@@ -83,6 +88,7 @@ class Evidence:
     def __init__(self) -> None:
         self.files: dict[str, str] = {}
         self.states: dict[str, dict[str, torch.Tensor]] = {}
+        self.rows: dict[str, list[dict[str, Any]]] = {}
 
     def file(self, path: str | Path) -> Path:
         result = resolve_artifact(path)
@@ -102,6 +108,18 @@ class Evidence:
             require(all(bool(torch.isfinite(v).all()) for v in state.values()), f"Nonfinite tensors: {key}")
             self.states[key] = state
         return self.states[key]
+
+    def cache(self, path: str | Path) -> tuple[Path, list[dict[str, Any]]]:
+        file = self.file(path)
+        key = str(file)
+        if key not in self.rows:
+            rows = torch.load(file, map_location="cpu", weights_only=False)
+            require(
+                isinstance(rows, list) and rows and all(isinstance(row, dict) for row in rows),
+                f"Transition cache must be a nonempty list[dict]: {file}",
+            )
+            self.rows[key] = rows
+        return file, self.rows[key]
 
     def verify_unchanged(self) -> None:
         for path, expected in self.files.items():
@@ -136,6 +154,107 @@ def _load_checkpoint(path: Path, evidence: Evidence) -> dict:
 
 def _training_cache(train: dict, evidence: Evidence) -> Path:
     return evidence.file(Path(train["dataset"]["repo_id"]) / "chunk_transitions_train.pt")
+
+
+def _scalar(row: dict[str, Any], key: str, *, index: int, cache: Path) -> float:
+    require(key in row, f"Missing {key!r} at row {index}: {cache}")
+    value = torch.as_tensor(row[key])
+    require(value.numel() == 1 and bool(torch.isfinite(value).all()),
+            f"Invalid scalar {key!r} at row {index}: {cache}")
+    return float(value.item())
+
+
+def validate_paper_cache(
+    path: Path,
+    evidence: Evidence,
+    *,
+    require_actual_sent_for_critic: bool,
+) -> dict[str, Any]:
+    """Require typed reward/credit semantics and stable row provenance."""
+    cache, rows = evidence.cache(path)
+    cache_version = validate_transition_cache_semantics(rows, cache_name=str(cache))
+    require(cache_version == TRANSITION_CACHE_SEMANTICS_VERSION,
+            f"Paper audit requires semantic-v{TRANSITION_CACHE_SEMANTICS_VERSION}: {cache}")
+    reward_versions = {row.get("reward_semantics_version") for row in rows}
+    require(reward_versions == {SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS},
+            f"Missing/mixed reward semantics in paper cache {cache}: {sorted(map(str, reward_versions))}")
+
+    episode_uids: set[str] = set()
+    transition_uids: list[str] = []
+    critic_valid = 0
+    actual_sent_checked = 0
+    actual_sent = 0
+    for index, row in enumerate(rows):
+        uid = row.get("episode_uid")
+        require(isinstance(uid, str) and bool(uid.strip()),
+                f"Paper audit requires stable episode_uid at row {index}: {cache}")
+        episode_uids.add(uid)
+        transition_uid = row.get("transition_uid")
+        if transition_uid is not None:
+            require(isinstance(transition_uid, str) and bool(transition_uid.strip()),
+                    f"Invalid transition_uid at row {index}: {cache}")
+            transition_uids.append(transition_uid)
+        mask = _scalar(row, "critic_mask", index=index, cache=cache)
+        require(mask in (0.0, 1.0), f"critic_mask must be binary at row {index}: {cache}")
+        if mask == 1.0:
+            critic_valid += 1
+            if "exec_action_is_actual_sent" in row:
+                sent = _scalar(row, "exec_action_is_actual_sent", index=index, cache=cache)
+                require(sent in (0.0, 1.0),
+                        f"exec_action_is_actual_sent must be binary at row {index}: {cache}")
+                actual_sent_checked += 1
+                actual_sent += int(sent == 1.0)
+                if require_actual_sent_for_critic:
+                    require(sent == 1.0,
+                            f"Critic-valid row {index} is not actual-sent (value={sent}): {cache}")
+            else:
+                require(
+                    not require_actual_sent_for_critic,
+                    f"Critic-valid row {index} has legacy/unknown executed-action semantics: {cache}",
+                )
+    require(not transition_uids or len(transition_uids) == len(rows),
+            f"transition_uid is present for only some rows: {cache}")
+    require(len(set(transition_uids)) == len(transition_uids),
+            f"Duplicate transition_uid within cache: {cache}")
+    require(not require_actual_sent_for_critic or critic_valid > 0,
+            f"Paper critic cache contains no critic-valid rows: {cache}")
+    return {
+        "path": str(cache),
+        "sha256": evidence.files[str(cache)],
+        "rows": len(rows),
+        "episodes": len(episode_uids),
+        "episode_uids": sorted(episode_uids),
+        "cache_semantics_version": cache_version,
+        "reward_semantics_version": SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS,
+        "critic_valid_rows": critic_valid,
+        "critic_valid_actual_sent_checked_rows": actual_sent_checked,
+        "critic_valid_actual_sent_rows": actual_sent,
+        "critic_valid_actual_sent_fraction": (
+            actual_sent / actual_sent_checked if actual_sent_checked else None
+        ),
+        "transition_uid_available": bool(transition_uids),
+        "transition_uids": transition_uids,
+    }
+
+
+def validate_episode_disjointness(train: dict[str, Any], audit: dict[str, Any]) -> dict[str, Any]:
+    train_uids, audit_uids = set(train["episode_uids"]), set(audit["episode_uids"])
+    overlap = sorted(train_uids & audit_uids)
+    train_transitions = set(train["transition_uids"])
+    audit_transitions = set(audit["transition_uids"])
+    transition_overlap = sorted(train_transitions & audit_transitions)
+    report = {
+        "train_episodes": len(train_uids),
+        "audit_episodes": len(audit_uids),
+        "overlapping_episodes": len(overlap),
+        "overlapping_episode_uids": overlap,
+        "transition_identity_check_available": bool(train_transitions and audit_transitions),
+        "overlapping_transitions": len(transition_overlap),
+        "overlapping_transition_uids": transition_overlap,
+    }
+    require(not overlap, f"D_train and D_audit share episodes: {overlap}")
+    require(not transition_overlap, f"D_train and D_audit share transitions: {transition_overlap}")
+    return report
 
 
 def _fingerprints(run: dict, updates: int, evidence: Evidence) -> tuple[Path, list[int]]:
@@ -193,6 +312,170 @@ def _optimizer(run: dict, updates: int, evidence: Evidence) -> list:
     return groups
 
 
+def _critic_optimizer(run: dict, evidence: Evidence) -> dict[str, Any]:
+    state = run["state"]
+    require("_critic_step" in state, f"Missing persistent critic update counter: {run['root']}")
+    updates = int(state["_critic_step"].item())
+    require(updates > 0, f"Critic checkpoint has no realized updates: {run['root']}")
+    root = run["root"].parent / "training_state"
+    require(evidence.json(root / "training_step.json")["step"] == updates,
+            f"Critic checkpoint/training-state update count differs: {root}")
+    groups = evidence.json(root / "optimizer_param_groups.json")
+    optimizer_state = evidence.state(root / "optimizer_state.safetensors")
+    require(len(groups) == 1, f"Expected one critic-only optimizer group: {root}")
+    _, critic = _construct_heads(run["config"])
+    parameters = list(critic.parameters())
+    ids = groups[0]["params"]
+    require(len(ids) == len(parameters) and len(set(ids)) == len(ids),
+            f"Critic optimizer parameter count differs: {root}")
+    expected_keys = {f"state/{i}/{key}" for i in ids for key in ("step", "exp_avg", "exp_avg_sq")}
+    require(set(optimizer_state) == expected_keys, f"Unexpected critic optimizer state keys: {root}")
+    for index, parameter in zip(ids, parameters, strict=True):
+        require(optimizer_state[f"state/{index}/step"].item() == updates,
+                f"Critic optimizer step differs for parameter {index}: {root}")
+        for moment in ("exp_avg", "exp_avg_sq"):
+            require(optimizer_state[f"state/{index}/{moment}"].shape == parameter.shape,
+                    f"Critic optimizer shape mismatch: {root}")
+    declared = run["train"]["optimizer"]
+    require(declared["type"] == "adamw", f"Paper critic fit requires AdamW: {root}")
+    expected = {
+        "lr": run["config"]["critic_lr"],
+        "betas": declared["betas"],
+        "eps": declared["eps"],
+        "weight_decay": declared["weight_decay"],
+    }
+    for key, value in expected.items():
+        require(groups[0][key] == value, f"Saved critic optimizer {key} differs from config: {root}")
+    return {"updates": updates, "groups": groups, "declared": declared}
+
+
+def _normalized_critic_fit(
+    run: dict,
+    *,
+    initialization_model_sha256: str,
+    initialization_actor_sha256: str,
+    training_cache_sha256: str,
+) -> dict[str, Any]:
+    """Remove only seed and non-executing output metadata from a critic fit."""
+    result = copy.deepcopy(run["train"])
+    for key in ("output_dir", "job_name", "checkpoint_path", "log_freq", "seed"):
+        result.pop(key, None)
+    wandb = result.pop("wandb", {})
+    require(not wandb.get("enable", False), "Paper critic fits cannot differ through an active logger")
+    result["dataset"]["repo_id"] = training_cache_sha256
+    for key in ("diagnostics_jsonl_path", "repo_id"):
+        result["policy"].pop(key, None)
+    result["policy"]["pretrained_path"] = {
+        "model_sha256": initialization_model_sha256,
+        "actor_sha256": initialization_actor_sha256,
+    }
+    return result
+
+
+def validate_critic_fits(
+    fits: dict[int, dict],
+    *,
+    audit_cache_sha256: str,
+    evidence: Evidence,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify that the two complete critic fits differ only by fit seed/output."""
+    require(set(fits) == {1, 2}, "Exactly two critic fits are required")
+    records: dict[str, Any] = {}
+    normalized: dict[int, dict] = {}
+    optimizers: dict[int, dict] = {}
+    for direction, fit in fits.items():
+        cfg, train, state = fit["config"], fit["train"], fit["state"]
+        require(cfg.get("training_stage") == "critic_only", f"Critic {direction} is not critic_only")
+        require(type(train.get("seed")) is int, f"Critic {direction} fit seed is missing")
+        require(train.get("resume") is False, f"Critic {direction} must start with fresh optimizer state")
+        require(train.get("scheduler") is None, f"Critic {direction} scheduler is not supported by paper audit")
+        require(train.get("eval_freq") == 0 and train.get("env") is None,
+                f"Critic {direction} has training-time evaluation side effects")
+        require(not train.get("use_rabc", False), f"Critic {direction} uses an unsupported objective")
+        require(train.get("use_policy_training_preset") is True,
+                f"Critic {direction} does not use the saved optimizer preset")
+        require(math.isfinite(cfg.get("gamma", float("nan"))), f"Critic {direction} gamma is invalid")
+        require(math.isfinite(cfg.get("tau", float("nan"))), f"Critic {direction} tau is invalid")
+        require(cfg.get("target_q_clip") is None or math.isfinite(cfg["target_q_clip"]),
+                f"Critic {direction} target_q_clip is invalid")
+        initial = _load_checkpoint(Path(cfg["pretrained_path"]), evidence)
+        initial_model = evidence.files[str(initial["root"] / "model.safetensors")]
+        initial_actor = tensor_digest(initial["state"], "actor.")
+        require(tensor_digest(state, "actor.") == initial_actor,
+                f"Critic {direction} modified its actor initialization")
+        cache = _training_cache(train, evidence)
+        require(evidence.files[str(cache)] != audit_cache_sha256,
+                f"Critic {direction} was fitted on D_audit")
+        cache_meta = validate_paper_cache(cache, evidence, require_actual_sent_for_critic=True)
+        optimizer = _critic_optimizer(fit, evidence)
+        require(optimizer["updates"] == int(state["_critic_step"].item()),
+                f"Critic {direction} update counter mismatch")
+        normalized[direction] = _normalized_critic_fit(
+            fit,
+            initialization_model_sha256=initial_model,
+            initialization_actor_sha256=initial_actor,
+            training_cache_sha256=cache_meta["sha256"],
+        )
+        optimizers[direction] = optimizer
+        records[str(direction)] = {
+            "checkpoint": str(fit["root"]),
+            "training_stage": cfg["training_stage"],
+            "fit_seed": train["seed"],
+            "critic_sha256": tensor_digest(state, "critic."),
+            "target_critic_sha256": tensor_digest(state, "target_critic."),
+            "actor_initialization_checkpoint": str(initial["root"]),
+            "actor_initialization_model_sha256": initial_model,
+            "actor_initialization_sha256": initial_actor,
+            "architecture": _head_signature(cfg),
+            "training_cache": cache_meta,
+            "critic_objective": {
+                "name": "masked_twin_critic_chunk_Bellman_MSE",
+                "use_rabc": False,
+                "validity_mask": "critic_mask",
+            },
+            "gamma": cfg["gamma"],
+            "target_q_clip": cfg.get("target_q_clip"),
+            "tau": cfg["tau"],
+            "target_critic_update": "Polyak update after every critic optimizer step",
+            "critic_bootstrap_mode": cfg.get("critic_bootstrap_mode"),
+            "critic_bootstrap_keep_prob": cfg.get("critic_bootstrap_keep_prob"),
+            "critic_bootstrap_seed": cfg.get("critic_bootstrap_seed"),
+            "optimizer_type": train["optimizer"]["type"],
+            "optimizer_configuration": optimizer["declared"],
+            "critic_learning_rate": cfg["critic_lr"],
+            "batch_size": train["batch_size"],
+            "source_sampling_weights": cfg.get("source_sampling_weights"),
+            "source_sampling_seed": cfg.get("source_sampling_seed"),
+            "critic_updates": optimizer["updates"],
+            "normalized_training_config": normalized[direction],
+        }
+    require(fits[1]["train"]["seed"] != fits[2]["train"]["seed"],
+            "Critic fit seeds are not different")
+    require(records["1"]["actor_initialization_sha256"] == records["2"]["actor_initialization_sha256"],
+            "Initial actor tensors differ across critic fits")
+    require(records["1"]["architecture"] == records["2"]["architecture"],
+            "Critic architectures differ")
+    require(records["1"]["training_cache"]["sha256"] == records["2"]["training_cache"]["sha256"],
+            "Critic training-cache hashes differ")
+    require(records["1"]["critic_updates"] == records["2"]["critic_updates"],
+            "Critic update counts differ")
+    require(optimizers[1]["groups"] == optimizers[2]["groups"],
+            "Saved critic optimizer groups differ")
+    require(normalized[1] == normalized[2],
+            f"Critic training configs differ beyond seed/output-only fields: {_differences(normalized[1], normalized[2])}")
+    require(records["1"]["critic_sha256"] != records["2"]["critic_sha256"],
+            "Both critic arguments contain identical critic tensors")
+    fields = (
+        "gamma", "target_q_clip", "tau", "critic_bootstrap_mode",
+        "critic_bootstrap_keep_prob", "critic_bootstrap_seed", "optimizer_type",
+        "critic_learning_rate", "batch_size", "source_sampling_weights",
+        "source_sampling_seed", "critic_updates",
+    )
+    require(all(records["1"][key] == records["2"][key] for key in fields),
+            "Explicit critic fitting fields differ")
+    return records, records["1"]["training_cache"]
+
+
 def _effective_config(run: dict, initial_hash: str, cache_hash: str, updates: int) -> dict:
     result = copy.deepcopy(run["train"])
     for key in ("output_dir", "job_name", "checkpoint_path", "log_freq", "wandb"):
@@ -227,19 +510,15 @@ def validate_full_refinement(
     evidence = evidence or Evidence()
     audit = evidence.file(audit_cache)  # A directory is deliberately not accepted.
     require(audit.suffix == ".pt", "audit_cache must be an explicit .pt file")
+    audit_meta = validate_paper_cache(audit, evidence, require_actual_sent_for_critic=False)
     fits = {k: _load_checkpoint(p, evidence) for k, p in critics.items()}
-    for fit in fits.values():
-        require(fit["config"]["training_stage"] == "critic_only", "Inducing checkpoint is not a critic-only fit")
-        require(type(fit["train"]["seed"]) is int, "Critic fit seed is missing")
-        cache = _training_cache(fit["train"], evidence)
-        require(evidence.files[str(cache)] != evidence.files[str(audit)], "Audit file is critic training cache")
-    require(fits[1]["train"]["seed"] != fits[2]["train"]["seed"], "Critic fit seeds are not independent")
-    require(tensor_digest(fits[1]["state"], "actor.") == tensor_digest(fits[2]["state"], "actor."),
-            "Initial actor tensors differ across the two critic checkpoints")
-    require(tensor_digest(fits[1]["state"], "critic.") != tensor_digest(fits[2]["state"], "critic."),
-            "Both critic arguments contain the same critic tensors")
+    critic_records, train_cache_meta = validate_critic_fits(
+        fits,
+        audit_cache_sha256=audit_meta["sha256"],
+        evidence=evidence,
+    )
+    disjointness = validate_episode_disjointness(train_cache_meta, audit_meta)
     fit_heads = _head_signature(fits[1]["config"])
-    require(fit_heads == _head_signature(fits[2]["config"]), "Critic/actor construction differs across fits")
 
     run_specs = [("q0", q0, 0.0, None)] + [(c.key, c.checkpoint, c.q_weight, c.inducing_critic) for c in candidates]
     records: dict[str, dict] = {}
@@ -284,6 +563,8 @@ def validate_full_refinement(
         cache = _training_cache(train, evidence)
         cache_hash = evidence.files[str(cache)]
         require(cache_hash != evidence.files[str(audit)], f"{key}: audit file is actor training cache")
+        require(cache_hash == train_cache_meta["sha256"],
+                f"{key}: actor refinement D_train differs from critic fitting D_train")
         log, fp = _fingerprints(run, expected_updates, evidence)
         groups = _optimizer(run, expected_updates, evidence)
         effective = _effective_config(run, initial_actor_hash, cache_hash, expected_updates)
@@ -315,10 +596,60 @@ def validate_full_refinement(
         "status": "MATCHED_EFFECTIVE_OPERATOR", "bidirectional_complete": not missing,
         "missing_candidates": missing, "expected_updates": expected_updates,
         "runs": records,
-        "critics": {str(k): {"checkpoint": str(f["root"]), "fit_seed": f["train"]["seed"],
-                               "critic_sha256": tensor_digest(f["state"], "critic.")} for k, f in fits.items()},
-        "audit_cache": str(audit), "audit_cache_sha256": evidence.files[str(audit)],
+        "critics": critic_records,
+        "critic_fit_match": {
+            "allowed_differences": ["seed", "output-only paths", "log frequency"],
+            "all_other_saved_training_configuration_identical": True,
+            "initial_model_sha256_identical": (
+                critic_records["1"]["actor_initialization_model_sha256"]
+                == critic_records["2"]["actor_initialization_model_sha256"]
+            ),
+            "initial_actor_sha256_identical": True,
+            "architecture_identical": True,
+            "training_cache_sha256_identical": True,
+            "reward_and_cache_semantics_identical": True,
+            "optimizer_configuration_identical": True,
+            "critic_updates_identical": True,
+        },
+        "training_cache": train_cache_meta,
+        "audit_cache": audit_meta,
+        "episode_disjointness": disjointness,
         "effective_config": reference,
+        "multi_step_update_object": {
+            "notation": {
+                "control": "theta_BC^(T) = U_0^(T)(theta_0; D_train)",
+                "treatment": "theta_lambda^(i,T) = U_lambda^(T)(Q^(i), theta_0; D_train)",
+            },
+            "T": expected_updates,
+            "theta_0_actor_sha256": records["q0"]["actor_initialization_sha256"],
+            "theta_0_checkpoint_by_direction": {
+                "1": critic_records["1"]["checkpoint"],
+                "2": critic_records["2"]["checkpoint"],
+            },
+            "D_train_sha256": train_cache_meta["sha256"],
+            "actor_optimizer_type": records["q0"]["optimizer_config"]["type"],
+            "actor_learning_rate": records["q0"]["optimizer_groups"][0]["lr"],
+            "beta": reference["policy"]["beta"],
+            "batch_size": reference["batch_size"],
+            "batch_seed": reference["seed"],
+            "source_sampling_seed": reference["policy"]["source_sampling_seed"],
+            "source_sampling_weights": reference["policy"]["source_sampling_weights"],
+            "batch_fingerprint_prefix_sha256": records["q0"]["batch_fingerprint_prefix_sha256"],
+            "Q0_q_weight": 0.0,
+            "treatment_q_weights": sorted({candidate.q_weight for candidate in candidates}),
+            "critic_parameters_frozen": True,
+            "identical_non_Q_actor_configuration": True,
+        },
+        "critic_td_target_semantics": {
+            "reward_padding": "reward_seq is zero-padded beyond actual_steps",
+            "bootstrap_exponent": "gamma ** actual_steps",
+            "bootstrap_gate": "explicit bootstrap_mask required by semantic-v2",
+            "next_action": "deterministic current-actor mean at next state/proposal, clamped to [-1,1]",
+            "next_value": "target critic min-Q",
+            "target_q_clip": critic_records["1"]["target_q_clip"],
+            "stop_gradient": True,
+            "separate_target_actor": False,
+        },
         "explicit_exceptions": {
             "critic_lr": "Inactive: optimizer contains only actor parameters; frozen critic tensors verified.",
             "planned_steps": "Compare realized prefix; scheduler is None, fixed weights, no training-time evaluation.",
@@ -328,6 +659,6 @@ def validate_full_refinement(
         "limitations": [
             "Rolling batch fingerprints are observed sequence evidence, not retained raw batch-index lists.",
             "Matching saved evidence does not establish identical historical CUDA/software environments.",
-            "Different cache hashes establish different files, not episode-level disjointness; local episode IDs cannot prove that.",
+            "Episode disjointness depends on source-dataset-stable episode_uid values stored in every transition.",
         ],
     }, evidence

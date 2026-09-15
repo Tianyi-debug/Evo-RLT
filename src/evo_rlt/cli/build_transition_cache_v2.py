@@ -56,6 +56,14 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--demo-dataset-repo-id", required=True)
     p.add_argument("--demo-dataset-root", required=True)
+    p.add_argument(
+        "--source-dataset-uid",
+        default=None,
+        help=(
+            "Stable identity of the recorded source dataset. Defaults to the declared "
+            "repo id. Set this explicitly when repo paths/names may change across mirrors."
+        ),
+    )
     p.add_argument("--rl-token-policy-path", required=True)
     p.add_argument("--vla-pretrained-path", required=True,
                    help="SFT VLA ckpt dir — preprocessor source. Must match deploy.")
@@ -818,6 +826,7 @@ def _encoded_episode_to_transitions(
     actor_bc_mode: str = "legacy",
     exec_action_is_actual_sent: bool = False,
     fps: float = 30.0,
+    episode_uid: str | None = None,
 ) -> list[ChunkTransition]:
     if not (state_vecs.shape[0] == ref_chunks.shape[0] == exec_chunks.shape[0] == len(frame_indices)):
         raise ValueError(
@@ -840,6 +849,7 @@ def _encoded_episode_to_transitions(
         episode_id=ep_id,
         is_critical=1.0,
         fps=fps,
+        episode_uid=episode_uid,
     )
     for transition in transitions:
         transition.exec_action_is_actual_sent = torch.tensor(
@@ -1031,6 +1041,7 @@ def _encode_episode(
     actor_bc_mode: str,
     exec_action_is_actual_sent: bool,
     fps: float,
+    episode_uid: str,
 ) -> list[ChunkTransition]:
     """Encode sampled episode frames and build paper-style C-step transitions."""
     if not frame_indices:
@@ -1096,6 +1107,7 @@ def _encode_episode(
         actor_bc_mode=actor_bc_mode,
         exec_action_is_actual_sent=exec_action_is_actual_sent,
         fps=fps,
+        episode_uid=episode_uid,
     )
 
 
@@ -1242,6 +1254,10 @@ def main() -> None:
     preprocessor, _ = make_rlt_token_pre_post_processors(config=cfg)
 
     _log(f"load dataset {args.demo_dataset_repo_id} root={args.demo_dataset_root}")
+    source_dataset_uid = (args.source_dataset_uid or f"lerobot:{args.demo_dataset_repo_id}").strip()
+    if not source_dataset_uid:
+        raise ValueError("--source-dataset-uid must not be empty")
+    _log(f"stable source dataset uid: {source_dataset_uid}")
     metadata = LeRobotDatasetMetadata(
         repo_id=args.demo_dataset_repo_id,
         root=args.demo_dataset_root,
@@ -1420,6 +1436,7 @@ def main() -> None:
                     actor_bc_mode=args.actor_bc_mode,
                     exec_action_is_actual_sent=exec_action_is_actual_sent,
                     fps=float(metadata.fps),
+                    episode_uid=f"{source_dataset_uid}:episode:{ep_id}",
                 )
                 raw_transition_count = sum(
                     1

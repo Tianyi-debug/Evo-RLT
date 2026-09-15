@@ -13,16 +13,28 @@ from safetensors.torch import load_file, save_file
 from torch import nn
 
 from evo_rlt.cli.audit_actor_q_mechanism import _construct_heads
+from evo_rlt.cli.audit_first_order_gradient_ratio import (
+    compute_gradient_ratio,
+    run as run_gradient_diagnostic,
+)
 from evo_rlt.cli.audit_full_refinement_bidirectional import evaluate_fixed_actors, run, summarize_metrics
 from evo_rlt.cli.full_refinement_provenance import (
     Candidate, ProvenanceError, tensor_digest, validate_full_refinement,
 )
+from evo_rlt.core.interfaces import (
+    SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS,
+    TRANSITION_CACHE_SEMANTICS_VERSION,
+)
 
 
 class FixedActor(nn.Module):
-    def __init__(self, action):
+    def __init__(self, action, bound=None):
         super().__init__()
         self.action = nn.Parameter(torch.tensor(action, dtype=torch.float32))
+        self.register_buffer(
+            "bound",
+            torch.tensor([1.0] * len(action) if bound is None else bound, dtype=torch.float32),
+        )
 
     def forward(self, states, proposal, training=False):
         assert not training and not torch.is_grad_enabled()
@@ -30,7 +42,7 @@ class FixedActor(nn.Module):
         return mu, torch.zeros_like(mu)
 
     def residual_delta_bound(self, like):
-        return torch.ones((1, 2), device=like.device)
+        return self.bound.to(like.device).reshape(1, -1)
 
 
 class LinearCritic(nn.Module):
@@ -42,6 +54,29 @@ class LinearCritic(nn.Module):
         assert not torch.is_grad_enabled()
         value = self.sign * actions.sum(-1, keepdim=True)
         return value, value + 0.1  # Require min-head scoring, not head mean.
+
+
+class GradientActor(nn.Module):
+    action_residual = True
+
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(4, 2, bias=False)
+        nn.init.constant_(self.linear.weight, 0.1)
+
+    def forward(self, states, proposal, training=True):
+        delta = 0.2 * torch.tanh(self.linear(states))
+        return proposal + delta, delta
+
+
+class GradientCritic(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.action_scale = nn.Parameter(torch.tensor([0.8, -0.3]))
+
+    def forward(self, states, actions):
+        q1 = (actions * self.action_scale).sum(-1, keepdim=True)
+        return q1, q1 + 0.1
 
 
 def forbid_updates(monkeypatch):
@@ -91,6 +126,24 @@ def test_zero_gain_is_not_positive_support():
     assert not values[5.0]["normalized_shift_percent"].any()
 
 
+def test_normalized_shift_uses_elementwise_bounds_then_state_and_direction_means():
+    values, _ = evaluate_fixed_actors(
+        control=FixedActor([0, 0], bound=[0.5, 2.0]),
+        candidates={5.0: {
+            1: FixedActor([0.5, 1.0], bound=[0.5, 2.0]),
+            2: FixedActor([1.0, 0.0], bound=[0.5, 2.0]),
+        }},
+        critics={1: LinearCritic(1), 2: LinearCritic(2)},
+        states=torch.zeros(3, 4),
+        proposals=torch.zeros(3, 2),
+    )
+    direction_1 = 100 * np.sqrt((1.0**2 + 0.5**2) / 2)
+    direction_2 = 100 * np.sqrt((2.0**2 + 0.0**2) / 2)
+    assert values[5.0]["normalized_shift_percent"].mean().item() == pytest.approx(
+        0.5 * (direction_1 + direction_2)
+    )
+
+
 def test_bootstrap_keeps_directions_paired_and_weights_transitions():
     values = {
         "rir_1_to_2": torch.tensor([1.0, 1, 0]), "rir_2_to_1": torch.tensor([0.0, 0, 1]),
@@ -105,9 +158,103 @@ def test_bootstrap_keeps_directions_paired_and_weights_transitions():
     assert single["metrics"]["rir"]["episode_bootstrap"]["ci95"] is None
 
 
+def test_gradient_ratio_is_raw_masked_and_does_not_mutate_models(monkeypatch):
+    actor, critic = GradientActor(), GradientCritic()
+    actor_before = {key: value.clone() for key, value in actor.state_dict().items()}
+    critic_before = {key: value.clone() for key, value in critic.state_dict().items()}
+
+    def forbidden_optimizer(*args, **kwargs):
+        raise AssertionError("Gradient diagnostic must not construct an optimizer")
+
+    monkeypatch.setattr(torch.optim.Optimizer, "__init__", forbidden_optimizer)
+    batch = {
+        "state_vec": torch.tensor([[1.0, 0, 0, 0], [0, 1.0, 0, 0]]),
+        "proposal_chunk_flat": torch.zeros(2, 2),
+        "bc_target_chunk_flat": torch.tensor([[0.2, -0.1], [0.1, 0.3]]),
+        "actor_q_mask": torch.tensor([1.0, 0.0]),
+        "actor_bc_mask": torch.tensor([1.0, 1.0]),
+    }
+    result = compute_gradient_ratio(
+        actor=actor,
+        critic=critic,
+        batch=batch,
+        lambda_q=5.0,
+        beta=1.0,
+        epsilon=1e-12,
+    )
+    assert result["r_grad"] == pytest.approx(
+        5.0 * result["q_gradient_norm"]
+        / (result["bc_gradient_norm"] + 1e-12)
+    )
+    assert result["actor_q_valid_rows"] == 1
+    assert result["actor_bc_valid_rows"] == 2
+    assert result["pre_gradient_clipping"] is True
+    assert result["pre_optimizer_preconditioning"] is True
+    assert result["optimizer_steps"] == 0
+    assert all(torch.equal(actor.state_dict()[key], value) for key, value in actor_before.items())
+    assert all(torch.equal(critic.state_dict()[key], value) for key, value in critic_before.items())
+    assert all(parameter.grad is None for parameter in (*actor.parameters(), *critic.parameters()))
+
+
 def write_json(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value))
+
+
+def transition_row(dataset_uid: str, episode: int, anchor: int, *, source: int) -> dict:
+    episode_uid = f"{dataset_uid}:episode:{episode}"
+    return {
+        "state_vec": torch.tensor([episode, anchor, source, 1.0], dtype=torch.float32),
+        "exec_chunk": torch.zeros(1, 2),
+        "ref_chunk": torch.zeros(1, 2),
+        "reward_seq": torch.zeros(1),
+        "next_state_vec": torch.tensor([episode, anchor + 1, source, 1.0], dtype=torch.float32),
+        "next_ref_chunk": torch.zeros(1, 2),
+        "proposal_chunk": torch.zeros(1, 2),
+        "bc_target_chunk": torch.full((1, 2), 0.1),
+        "next_proposal_chunk": torch.zeros(1, 2),
+        "done": torch.tensor(0.0),
+        "intervention": torch.tensor(0.0),
+        "bootstrap_mask": torch.tensor(1.0),
+        "actual_steps": torch.tensor(1),
+        "source": torch.tensor(source),
+        "episode_id": torch.tensor(episode),
+        "episode_uid": episode_uid,
+        "transition_uid": f"{episode_uid}:anchor:{anchor}:chunk:1:stride:1",
+        "is_critical": torch.tensor(0.0),
+        "critic_mask": torch.tensor(1.0),
+        "actor_q_mask": torch.tensor(1.0),
+        "actor_bc_mask": torch.tensor(1.0),
+        "intervention_reason": torch.tensor(0),
+        "cache_semantics_version": torch.tensor(TRANSITION_CACHE_SEMANTICS_VERSION),
+        "reward_semantics_version": SPARSE_TERMINAL_SUCCESS_REWARD_SEMANTICS,
+        "exec_action_is_actual_sent": torch.tensor(1.0),
+        "anchor_start_frame": torch.tensor(anchor),
+        "frame_stride": torch.tensor(1),
+        "fps": torch.tensor(30.0),
+    }
+
+
+def write_optimizer_state(root: Path, module: nn.Module, *, steps: int, lr: float) -> None:
+    state_root = root.parent / "training_state"
+    write_json(state_root / "training_step.json", {"step": steps})
+    parameters = list(module.parameters())
+    write_json(
+        state_root / "optimizer_param_groups.json",
+        [{
+            "params": list(range(len(parameters))),
+            "lr": lr,
+            "betas": [0.9, 0.999],
+            "eps": 1e-8,
+            "weight_decay": 0,
+        }],
+    )
+    optimizer_state = {}
+    for index, parameter in enumerate(parameters):
+        optimizer_state[f"state/{index}/step"] = torch.tensor(float(steps))
+        optimizer_state[f"state/{index}/exp_avg"] = torch.zeros_like(parameter)
+        optimizer_state[f"state/{index}/exp_avg_sq"] = torch.zeros_like(parameter)
+    save_file(optimizer_state, str(state_root / "optimizer_state.safetensors"))
 
 
 @pytest.fixture
@@ -122,16 +269,26 @@ def artifacts(tmp_path):
         "actor_behavior_preservation_weight": 0.0, "actor_human_weight": 0.0, "actor_teacher_weight": 0.0,
         "actor_teacher_pretrained_path": "", "actor_q_weight_max": 0.0,
         "actor_lr": 5e-6, "training_lr": 5e-6, "critic_lr": 1e-4,
+        "gamma": 0.99, "tau": 0.005, "target_q_clip": 100.0,
+        "critic_bootstrap_mode": "none", "critic_bootstrap_keep_prob": 0.8,
+        "critic_bootstrap_seed": 1000,
         "utd_ratio": 1, "actor_update_interval": 1, "use_amp": False, "use_peft": False,
         "source_sampling_seed": 1000, "source_sampling_weights": [0.5, 0, 0.5, 0],
+        "pretrained_path": "",
     }
     train_cache = tmp_path / "train" / "chunk_transitions_train.pt"
     train_cache.parent.mkdir()
-    torch.save([{"training_fixture": True}], train_cache)
+    torch.save([
+        transition_row("train-set", 0, 0, source=0),
+        transition_row("train-set", 0, 1, source=0),
+        transition_row("train-set", 1, 0, source=2),
+        transition_row("train-set", 1, 1, source=2),
+    ], train_cache)
     audit = tmp_path / "audit" / "chunk_transitions_val.pt"
     audit.parent.mkdir()
-    torch.save([{"state_vec": torch.ones(4) * i, "proposal_chunk": torch.zeros(1, 2),
-                 "actor_q_mask": torch.tensor(i != 2), "episode_id": torch.tensor(i)} for i in range(3)], audit)
+    audit_rows = [transition_row("audit-set", i, 0, source=2) for i in range(3)]
+    audit_rows[2]["actor_q_mask"] = torch.tensor(0.0)
+    torch.save(audit_rows, audit)
     train_base = {
         "dataset": {"repo_id": str(train_cache.parent)}, "policy": cfg,
         "optimizer": {"type": "adamw", "lr": 5e-6, "weight_decay": 0, "betas": [0.9, 0.999],
@@ -141,7 +298,20 @@ def artifacts(tmp_path):
         "env": None, "use_policy_training_preset": True, "wandb": {"enable": False},
     }
     torch.manual_seed(17)
-    initial_actor, _ = _construct_heads(cfg)
+    initial_actor, initial_critic = _construct_heads(cfg)
+    warmup = tmp_path / "warmup" / "checkpoints" / "000000" / "pretrained_model"
+    warmup_config = {**cfg, "training_stage": "mixed_ac"}
+    write_json(warmup / "config.json", warmup_config)
+    write_json(warmup / "train_config.json", {**train_base, "policy": warmup_config})
+    warmup_state = {
+        **{f"actor.{name}": value.clone() for name, value in initial_actor.state_dict().items()},
+        **{f"critic.{name}": value.clone() for name, value in initial_critic.state_dict().items()},
+        **{f"target_critic.{name}": value.clone() for name, value in initial_critic.state_dict().items()},
+        "_actor_refine_step": torch.tensor(0),
+        "_actor_refine_batch_fingerprint": torch.tensor(0),
+        "_critic_step": torch.tensor(0),
+    }
+    save_file(warmup_state, str(warmup / "model.safetensors"))
     critics, initial_states = {}, {}
     for k in (1, 2):
         torch.manual_seed(10 * k)
@@ -149,12 +319,15 @@ def artifacts(tmp_path):
         state = {f"actor.{name}": value.clone() for name, value in initial_actor.state_dict().items()}
         for prefix in ("critic.", "target_critic."):
             state.update({prefix + name: value.clone() for name, value in critic.state_dict().items()})
-        state.update({"_actor_refine_step": torch.tensor(0), "_actor_refine_batch_fingerprint": torch.tensor(0)})
-        root = tmp_path / f"critic{k}" / "checkpoints" / "000010" / "pretrained_model"
-        fit_config = {**cfg, "training_stage": "critic_only"}
+        state.update({"_actor_refine_step": torch.tensor(0),
+                      "_actor_refine_batch_fingerprint": torch.tensor(0),
+                      "_critic_step": torch.tensor(6)})
+        root = tmp_path / f"critic{k}" / "checkpoints" / "000006" / "pretrained_model"
+        fit_config = {**cfg, "training_stage": "critic_only", "pretrained_path": str(warmup)}
         write_json(root / "config.json", fit_config)
         write_json(root / "train_config.json", {**train_base, "policy": fit_config, "seed": k * 1000})
         save_file(state, str(root / "model.safetensors"))
+        write_optimizer_state(root, critic, steps=6, lr=1e-4)
         critics[k], initial_states[k] = root, state
     paths = {}
     for label, q, direction in (("q0", 0, 1), ("q5_c1", 5, 1), ("q5_c2", 5, 2)):
@@ -174,17 +347,7 @@ def artifacts(tmp_path):
                         "actor_refine_stage": True, "actor_refine_td3bc": True,
                         "actor_update": True, "actor_q_weight": q} for step, fp in enumerate([111, 222, 333], 1)]
         Path(policy["diagnostics_jsonl_path"]).write_text("\n".join(json.dumps(row) for row in diagnostics))
-        opt_root = root.parent / "training_state"
-        write_json(opt_root / "training_step.json", {"step": 3})
-        params = list(initial_actor.parameters())
-        write_json(opt_root / "optimizer_param_groups.json", [{"params": list(range(len(params))),
-                   "lr": 5e-6, "betas": [0.9, 0.999], "eps": 1e-8, "weight_decay": 0}])
-        opt = {}
-        for index, parameter in enumerate(params):
-            opt[f"state/{index}/step"] = torch.tensor(3.)
-            opt[f"state/{index}/exp_avg"] = torch.zeros_like(parameter)
-            opt[f"state/{index}/exp_avg_sq"] = torch.zeros_like(parameter)
-        save_file(opt, str(opt_root / "optimizer_state.safetensors"))
+        write_optimizer_state(root, initial_actor, steps=3, lr=5e-6)
         paths[label] = root
     return {"q0": paths["q0"], "critics": critics, "audit_cache": audit, "expected_updates": 3,
             "candidates": [Candidate(5, k, paths[f"q5_c{k}"]) for k in (1, 2)]}
@@ -199,6 +362,11 @@ def patch_policy(path, **changes):
     write_json(path / "train_config.json", train)
 
 
+def training_cache_for_checkpoint(path: Path) -> Path:
+    train = json.loads((path / "train_config.json").read_text())
+    return Path(train["dataset"]["repo_id"]) / "chunk_transitions_train.pt"
+
+
 def test_matched_effective_operator_and_critic_lr_exception(artifacts):
     patch_policy(artifacts["candidates"][1].checkpoint, critic_lr=None)
     match, evidence = validate_full_refinement(**artifacts)
@@ -207,7 +375,75 @@ def test_matched_effective_operator_and_critic_lr_exception(artifacts):
     assert match["runs"]["q5_c2"]["raw_policy_differences_from_q0"]["critic_lr"] == [1e-4, None]
     assert match["runs"]["q5_c2"]["planned_steps"] == 3
     assert match["runs"]["q0"]["planned_steps"] == 6
+    assert match["critics"]["1"]["training_cache"]["sha256"] == match["training_cache"]["sha256"]
+    assert match["episode_disjointness"]["overlapping_episodes"] == 0
+    assert match["multi_step_update_object"]["T"] == 3
+    assert match["training_cache"]["critic_valid_actual_sent_fraction"] == 1.0
     evidence.verify_unchanged()
+
+
+def test_gradient_diagnostic_cli_path_uses_matched_q0_and_dtrain(artifacts, tmp_path):
+    report = run_gradient_diagnostic(argparse.Namespace(
+        candidate_checkpoint=artifacts["candidates"][0].checkpoint,
+        q0_checkpoint=artifacts["q0"],
+        batch_size=2,
+        minibatch_seed=123,
+        epsilon=1e-12,
+        device="cpu",
+        output=tmp_path / "gradient_ratio.json",
+    ))
+    assert report["separate_from_RIR"] is True
+    assert report["matched_q0_checkpoint"] == str(artifacts["q0"])
+    assert report["D_train"]["path"].endswith("chunk_transitions_train.pt")
+    assert report["diagnostic"]["optimizer_steps"] == 0
+
+
+def test_rejects_critic_training_cache_hash_difference(artifacts, tmp_path):
+    source = training_cache_for_checkpoint(artifacts["critics"][1])
+    rows = torch.load(source, map_location="cpu", weights_only=False)
+    rows[0]["state_vec"] = rows[0]["state_vec"] + 0.25
+    alternate = tmp_path / "alternate-train" / "chunk_transitions_train.pt"
+    alternate.parent.mkdir()
+    torch.save(rows, alternate)
+    critic_2_train_path = artifacts["critics"][2] / "train_config.json"
+    critic_2_train = json.loads(critic_2_train_path.read_text())
+    critic_2_train["dataset"]["repo_id"] = str(alternate.parent)
+    write_json(critic_2_train_path, critic_2_train)
+    with pytest.raises(ProvenanceError, match="training-cache hashes differ"):
+        validate_full_refinement(**artifacts)
+
+
+def test_rejects_critic_objective_or_config_difference_beyond_seed(artifacts):
+    patch_policy(artifacts["critics"][2], gamma=0.95)
+    with pytest.raises(ProvenanceError, match="differ beyond seed/output-only"):
+        validate_full_refinement(**artifacts)
+
+
+def test_rejects_train_audit_episode_overlap(artifacts):
+    rows = torch.load(artifacts["audit_cache"], map_location="cpu", weights_only=False)
+    rows[0]["episode_uid"] = "train-set:episode:0"
+    rows[0]["transition_uid"] = "train-set:episode:0:audit-anchor:0"
+    torch.save(rows, artifacts["audit_cache"])
+    with pytest.raises(ProvenanceError, match="share episodes"):
+        validate_full_refinement(**artifacts)
+
+
+def test_rejects_critic_valid_row_without_actual_sent_action(artifacts):
+    train_cache = training_cache_for_checkpoint(artifacts["critics"][1])
+    rows = torch.load(train_cache, map_location="cpu", weights_only=False)
+    rows[0]["exec_action_is_actual_sent"] = torch.tensor(0.0)
+    torch.save(rows, train_cache)
+    with pytest.raises(ProvenanceError, match="not actual-sent"):
+        validate_full_refinement(**artifacts)
+
+
+def test_rejects_actor_refinement_step_count_difference(artifacts):
+    checkpoint = artifacts["candidates"][1].checkpoint / "model.safetensors"
+    state = load_file(str(checkpoint))
+    state["_actor_refine_step"] = torch.tensor(2)
+    save_file(state, str(checkpoint))
+    with pytest.raises(ProvenanceError, match="Checkpoint update count differs"):
+        validate_full_refinement(**artifacts)
 
 
 @pytest.mark.parametrize("field,value", [("beta", 2.0), ("actor_teacher_weight", 1.0),
@@ -266,14 +502,14 @@ def test_rejects_distinct_initial_actor_even_for_preflight(artifacts):
     state = load_file(str(path))
     state[next(k for k in state if k.startswith("actor."))].add_(1)
     save_file(state, str(path))
-    with pytest.raises(ProvenanceError, match="Initial actor tensors differ"):
+    with pytest.raises(ProvenanceError, match="actor initialization"):
         validate_full_refinement(**artifacts)
 
 
 def test_rejects_training_cache_as_audit_file(artifacts):
     config = json.loads((artifacts["q0"] / "train_config.json").read_text())
     artifacts["audit_cache"] = Path(config["dataset"]["repo_id"]) / "chunk_transitions_train.pt"
-    with pytest.raises(ProvenanceError, match="training cache"):
+    with pytest.raises(ProvenanceError, match="fitted on D_audit"):
         validate_full_refinement(**artifacts)
 
 
@@ -310,10 +546,7 @@ def test_end_to_end_exports_only_fixed_actor_results(artifacts, tmp_path, monkey
         run(arguments(artifacts, tmp_path / "result"))
 
 
-def test_preflight_does_not_load_or_evaluate_audit_rows(artifacts, tmp_path, monkeypatch):
-    def forbidden(*args, **kwargs):
-        raise AssertionError("Preflight must not load audit transitions")
-    monkeypatch.setattr(torch, "load", forbidden)
+def test_preflight_validates_provenance_without_evaluating_audit_rows(artifacts, tmp_path):
     artifacts["candidates"] = artifacts["candidates"][:1]
     report = run(arguments(artifacts, tmp_path / "preflight", preflight=True))
     assert report["status"] == "PREFLIGHT_ONLY" and report["results"] == {}
